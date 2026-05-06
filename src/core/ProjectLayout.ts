@@ -35,10 +35,14 @@ export interface PrefabOutputLayout {
   genTsPath: string;
   /** .bind.json 绝对路径 */
   bindJsonPath: string;
+  /** .view.ts 绝对路径（开发者可改、只首次生成） */
+  viewTsPath: string;
   /** 相对项目根的 .gen.ts 路径（用于 registry） */
   genTsRel: string;
   /** 相对项目根的 .bind.json 路径（用于 registry） */
   bindJsonRel: string;
+  /** 相对项目根的 .view.ts 路径（用于 registry） */
+  viewTsRel: string;
 }
 
 export interface LayoutOptions {
@@ -57,13 +61,16 @@ export function resolvePrefabLayout(opts: LayoutOptions): PrefabOutputLayout {
   const outDir = path.join(opts.projectRoot, GENBOT_ROOT_REL, safeName);
   const genTsPath = path.join(outDir, `${safeName}.gen.ts`);
   const bindJsonPath = path.join(outDir, `${safeName}.bind.json`);
+  const viewTsPath = path.join(outDir, `${safeName}.view.ts`);
   return {
     prefabName: safeName,
     outDir,
     genTsPath,
     bindJsonPath,
+    viewTsPath,
     genTsRel: toRel(opts.projectRoot, genTsPath),
     bindJsonRel: toRel(opts.projectRoot, bindJsonPath),
+    viewTsRel: toRel(opts.projectRoot, viewTsPath),
   };
 }
 

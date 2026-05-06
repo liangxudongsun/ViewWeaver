@@ -236,6 +236,168 @@ test("generateGenTs: button-only default produces parseable TS with Button impor
   }
 });
 
+test("generateGenTs: emits onClickXxx hook + Button.EventType.CLICK binding for cc.Button", () => {
+  const parsed = parsePrefab(buildSyntheticPrefab() as never);
+  const cfg = makeDefaultBindConfig(parsed, {
+    prefabRelativePath: "panel.prefab",
+    outputPath: "panel.gen.ts",
+  });
+  const code = generateGenTs(cfg, parsed);
+  // gen.ts 内部类用下划线前缀，且 extends Component
+  assert(/export class\s+_\w+View\s+extends\s+Component/.test(code),
+    `gen.ts should declare 'export class _XxxView extends Component'; got:\n${code.slice(0, 600)}`);
+  // 默认规则下 child_b/same_name(0) 是唯一 button 节点 → 字段名按路径派生
+  // 我们只断言"存在 onClick<X>(): void {} 钩子"和它的字段是同一个名字，避免硬编码字段命名规则
+  const fieldMatch = /public readonly\s+(\w+)!:\s*Button;/.exec(code);
+  assert(fieldMatch != null, `expected a Button field; got:\n${code}`);
+  const field = fieldMatch![1];
+  const hookName = "onClick" + field.charAt(0).toUpperCase() + field.slice(1);
+  const hookRe = new RegExp(`protected\\s+${hookName}\\s*\\(\\s*\\)\\s*:\\s*void\\s*\\{`);
+  assert(hookRe.test(code), `expected ${hookName} hook; got:\n${code}`);
+  // bind() 应注册 Button.EventType.CLICK，并把 w[<hookName>] 当作 listener
+  assert(/Button\.EventType\.CLICK/.test(code), `expected Button.EventType.CLICK; got:\n${code}`);
+  const dispatchRe = new RegExp(`w\\.${hookName}\\b`);
+  assert(dispatchRe.test(code), `expected dispatch via w.${hookName}; got:\n${code}`);
+});
+
+test("makeDefaultBindConfig: a Button subclass triggers node export, but ButtonScale-like custom does NOT", () => {
+  // 合成一个 prefab：A 节点挂"假装继承 Button"的自定义 + 一个 Button 子类节点；
+  //                  B 节点只挂"普通自定义脚本"（既不是 Button 也不是 Button 子类）。
+  // 期望默认规则下：A 进入导出（因为 isButton=true）、B 不进入。
+  const data: unknown[] = [
+    /* 0 */ { __type__: "cc.Prefab", _name: "panel", data: { __id__: 1 } },
+    /* 1 */ {
+      __type__: "cc.Node",
+      _name: "panel",
+      _parent: null,
+      _children: [{ __id__: 2 }, { __id__: 3 }],
+      _components: [],
+      _active: true,
+    },
+    /* 2 */ {
+      __type__: "cc.Node",
+      _name: "withButtonSubclass",
+      _parent: { __id__: 1 },
+      _children: [],
+      _components: [{ __id__: 4 }],
+      _active: true,
+    },
+    /* 3 */ {
+      __type__: "cc.Node",
+      _name: "withPlainCustom",
+      _parent: { __id__: 1 },
+      _children: [],
+      _components: [{ __id__: 5 }],
+      _active: true,
+    },
+    /* 4 */ { __type__: "FAKE_UUID_BUTTON_SUB", node: { __id__: 2 }, _enabled: true },
+    /* 5 */ { __type__: "FAKE_UUID_PLAIN", node: { __id__: 3 }, _enabled: true },
+  ];
+  const parsed = parsePrefab(data as never);
+  // 模拟 ScriptTypeRegistry 解析出的 typeInfo：手动注入到 component
+  for (const c of parsed.allComponents) {
+    if (c.rawType === "FAKE_UUID_BUTTON_SUB") {
+      c.typeInfo = {
+        tsName: "MyMenuButton",
+        importFrom: "./MyMenuButton",
+        builtin: false,
+        extendsClassName: "Button",
+        isButton: true,
+      };
+    } else if (c.rawType === "FAKE_UUID_PLAIN") {
+      c.typeInfo = {
+        tsName: "ButtonScale",
+        importFrom: "./ButtonScale",
+        builtin: false,
+        extendsClassName: "Component",
+        isButton: false,
+      };
+    }
+  }
+  const cfg = makeDefaultBindConfig(parsed, {
+    prefabRelativePath: "panel.prefab",
+    outputPath: "panel.gen.ts",
+  });
+  const paths = cfg.nodes.map((n) => n.path);
+  assert(paths.includes("withButtonSubclass"),
+    `Button-subclass node should be exported by default; got ${JSON.stringify(paths)}`);
+  assert(!paths.includes("withPlainCustom"),
+    `non-button custom (ButtonScale-like) should NOT trigger export; got ${JSON.stringify(paths)}`);
+  // 该节点的导出组件就是这个 Button 子类
+  const entry = cfg.nodes.find((n) => n.path === "withButtonSubclass")!;
+  eq(entry.components?.length, 1, "single Button-subclass component exposed");
+  eq(entry.components![0].rawType, "FAKE_UUID_BUTTON_SUB", "exposed component is the subclass");
+});
+
+test("generateViewTs: emits 'export class XxxView extends _XxxView' header", async () => {
+  const parsed = parsePrefab(buildSyntheticPrefab() as never);
+  const cfg = makeDefaultBindConfig(parsed, {
+    prefabRelativePath: "panel.prefab",
+    outputPath: "panel.gen.ts",
+  });
+  const { generateViewTs } = await import("../src/generators/ViewTsGenerator.ts");
+  const view = generateViewTs(cfg);
+  // 头部声明明确"开发者可改、工具不会覆盖"
+  assert(/THIS FILE IS YOURS TO EDIT/.test(view), "view.ts header marks ownership");
+  // 类名 = viewClassName，extends gen.ts 内部类 _viewClassName
+  const pattern = new RegExp(`export class\\s+${cfg.viewClassName}\\s+extends\\s+_${cfg.viewClassName}\\b`);
+  assert(pattern.test(view), `view.ts should extend _${cfg.viewClassName}; got:\n${view}`);
+  // import 路径默认指向同目录的 .gen 文件
+  assert(/from\s+"\.\/panel\.gen"/.test(view), `view.ts should import from "./panel.gen"; got:\n${view}`);
+});
+
+test("runOnce: view.ts is generate-once — second run keeps user edits", async () => {
+  const projectRoot = path.resolve(__dirname, "../../..");
+  const prefab = path.join(
+    projectRoot,
+    "extensions/proj-l-commonui/assets/ab/prefab/ui/common_ui.prefab"
+  );
+  if (!fs.existsSync(prefab)) {
+    process.stdout.write("    SKIP: real project not present\n");
+    return;
+  }
+  if (!fs.existsSync(path.join(projectRoot, "assets")) || !fs.existsSync(path.join(projectRoot, "settings"))) {
+    process.stdout.write("    SKIP: not a Cocos project root\n");
+    return;
+  }
+  // 用临时 outDir 隔离，不污染真实项目
+  const tmpDir = path.join(__dirname, ".tmp-view-once");
+  fs.mkdirSync(tmpDir, { recursive: true });
+  try {
+    // 第一次：view.ts 应当被新建
+    const r1 = runOnce({
+      prefabPath: prefab,
+      outDir: tmpDir,
+      bindPath: path.join(tmpDir, "common_ui.bind.json"),
+      projectRoot,
+      mode: "write",
+      regenBind: true,
+    });
+    assert(r1.ok, "first run ok");
+    eq(r1.viewStatus, "created", "first run creates view.ts");
+    assert(fs.existsSync(r1.viewFile), "view.ts written to disk");
+
+    // 模拟开发者改了 view.ts —— 加一行 marker
+    const userMarker = "// >>> USER EDIT MARKER <<<";
+    fs.appendFileSync(r1.viewFile, "\n" + userMarker + "\n");
+
+    // 第二次：view.ts 应保留，gen.ts 仍重写
+    const r2 = runOnce({
+      prefabPath: prefab,
+      outDir: tmpDir,
+      bindPath: path.join(tmpDir, "common_ui.bind.json"),
+      projectRoot,
+      mode: "write",
+    });
+    assert(r2.ok, "second run ok");
+    eq(r2.viewStatus, "skipped-exists", "second run keeps user view.ts");
+    const onDisk = fs.readFileSync(r2.viewFile, "utf8");
+    assert(onDisk.includes(userMarker), "user edits preserved across re-runs");
+  } finally {
+    try { fs.rmSync(tmpDir, { recursive: true, force: true }); } catch { /* best-effort */ }
+  }
+});
+
 test("generateGenTs: emits sibling-dedup fallback when same-name siblings are both exposed", () => {
   const parsed = parsePrefab(buildSyntheticPrefab() as never);
   // 强制走「全暴露」路径，让两个 same_name 都进配置
@@ -655,11 +817,15 @@ test("runOnce: integration on real proj-l-client common_ui.prefab", () => {
   // 实例覆盖率应当 >= 80%
   const coverage = sr.resolved / sr.totalUnknown;
   assert(coverage >= 0.8, `instance coverage too low: ${(coverage * 100).toFixed(1)}%`);
-  // 生成的代码里应该出现至少一个非 cc/sp 的 import
-  const customImports = result.code.match(/^import \{ [^}]+ \} from "\.\./gm);
+  // 默认规则只导 cc.Button + Button 子类，所以生成代码里:
+  //   · 一定 import cc.Button
+  //   · 应当生成 view.ts 内容（首次或 dry-run）
+  //   · 不再要求出现自定义脚本 import（除非项目里有 Button 子类）
+  assert(/\bButton\b/.test(result.code), "gen.ts should import Button when buttons are exposed");
+  assert(result.viewCode.length > 0, "view.ts code should be rendered (dry-run)");
   assert(
-    customImports != null && customImports.length > 0,
-    "generated code has at least one custom import"
+    /export class\s+\w+View\s+extends\s+_\w+View/.test(result.viewCode),
+    `view.ts should declare 'export class XxxView extends _XxxView'; got:\n${result.viewCode.slice(0, 400)}`
   );
 });
 

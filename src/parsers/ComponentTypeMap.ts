@@ -20,6 +20,19 @@ export interface ComponentTypeInfo {
    * 仅对自定义脚本有意义；cc.* 都是命名导出。
    */
   isDefaultExport?: boolean;
+  /**
+   * `extends X` 中 X 的字面量名（仅对自定义脚本有意义）。
+   * 例：`class MyButton extends Button` → `extendsClassName === "Button"`。
+   * 用于触发"Button 子类"识别。
+   */
+  extendsClassName?: string;
+  /**
+   * 是否为 cc.Button 或其子类。
+   *  · cc.Button 内置 → true
+   *  · 自定义脚本继承自 Button（含通过 ScriptTypeRegistry 解析出的 `extendsClassName === "Button"`）→ true
+   *  · 其它 → undefined / false
+   */
+  isButton?: boolean;
 }
 
 /**
@@ -117,7 +130,12 @@ export function isCustomComponent(typeName: string): boolean {
  */
 export function lookupComponentType(typeName: string): ComponentTypeInfo | undefined {
   if (typeName in CC_BUILTIN) {
-    return { tsName: CC_BUILTIN[typeName], importFrom: "cc", builtin: true };
+    return {
+      tsName: CC_BUILTIN[typeName],
+      importFrom: "cc",
+      builtin: true,
+      isButton: typeName === "cc.Button",
+    };
   }
   if (typeName in SP_BUILTIN) {
     return { tsName: SP_BUILTIN[typeName], importFrom: "sp", builtin: true };

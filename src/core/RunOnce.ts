@@ -21,6 +21,7 @@ import {
   validateBindAgainstPrefab,
 } from "../generators/BindJsonManager.ts";
 import { generateGenTs } from "../generators/GenTsGenerator.ts";
+import { generateViewTs } from "../generators/ViewTsGenerator.ts";
 import { writeFileSafe, basenameNoExt } from "../utils/paths.ts";
 import { ScriptTypeRegistry } from "./ScriptTypeRegistry.ts";
 import { inferProjectRoot } from "./ProjectLayout.ts";
@@ -73,12 +74,23 @@ export interface RunResult {
   prefabPath: string;
   outFile: string;
   bindPath: string;
+  /** view.ts 绝对路径（即使没新生成，也是预期路径） */
+  viewFile: string;
   /** 解析得到的 prefab 树 */
   parsed: ParsedPrefab;
   /** 实际使用的 bind 配置（已存在加载 / 否则按默认生成） */
   config: BindConfig;
   /** 是否使用了默认（即首次生成或被 regen 覆盖） */
   usedDefault: boolean;
+  /**
+   * view.ts 处理结果：
+   *  - "created": 本次新建（首次生成）
+   *  - "skipped-exists": 已存在，按"只生成一次"策略跳过
+   *  - "dry-run": dry-run 模式不写盘
+   */
+  viewStatus: "created" | "skipped-exists" | "dry-run";
+  /** view.ts 内容（无论是否真写盘都会渲染，便于 diff 预览） */
+  viewCode: string;
   /** 校验结果（仅在加载已有 bind.json 时非空） */
   issues: BindValidationIssue[];
   /** 生成的 .gen.ts 代码（dry-run 也会有） */
@@ -162,6 +174,8 @@ export function runOnce(options: RunOptions): RunResult {
   const prefabName = basenameNoExt(prefabPath);
   const outFile = path.join(options.outDir, `${prefabName}.gen.ts`);
   const bindPath = options.bindPath ?? path.join(options.outDir, `${prefabName}.bind.json`);
+  // view.ts 路径与 gen.ts 同目录、同 prefab 名，扩展名为 .view.ts。该文件 "只首次生成"。
+  const viewFile = path.join(options.outDir, `${prefabName}.view.ts`);
 
   // 自定义脚本类型解析（v0.2 阶段 3）：把 unknown 组件的 UUID 解析为业务类型
   let scriptResolve: ScriptResolveStats | undefined;
@@ -234,9 +248,12 @@ export function runOnce(options: RunOptions): RunResult {
         prefabPath,
         outFile,
         bindPath,
+        viewFile,
         parsed,
         config,
         usedDefault: false,
+        viewStatus: "skipped-exists",
+        viewCode: "",
         issues,
         code: "",
         durations: { parse: tParse, validate: tVal, resolve: tResolve, generate: 0, write: 0, total: Date.now() - t0 },
@@ -270,9 +287,12 @@ export function runOnce(options: RunOptions): RunResult {
         prefabPath,
         outFile,
         bindPath,
+        viewFile,
         parsed,
         config,
         usedDefault: false,
+        viewStatus: "skipped-exists",
+        viewCode: "",
         issues,
         code: "",
         durations: { parse: tParse, validate: tVal, resolve: 0, generate: 0, write: 0, total: Date.now() - t0 },
@@ -310,16 +330,35 @@ export function runOnce(options: RunOptions): RunResult {
     toolVersion: options.toolVersion ?? TOOL_VERSION,
     bindRelativePath: bindRelForHeader,
   });
+  // view.ts 也在 generate 阶段渲染（dry-run 也能看到内容）；写盘策略另算。
+  const viewCode = generateViewTs(config, {
+    toolVersion: options.toolVersion ?? TOOL_VERSION,
+  });
   const tGen = Date.now() - tGen0;
 
   let tWrite = 0;
+  let viewStatus: RunResult["viewStatus"] = "dry-run";
   if (mode === "write") {
     const tW0 = Date.now();
     writeFileSafe(outFile, code);
+    // view.ts 只在不存在时写入：开发者首次生成后可放心改业务代码，不会被覆盖。
+    if (fs.existsSync(viewFile)) {
+      viewStatus = "skipped-exists";
+      log.info(`view.ts already exists, kept user copy: ${viewFile}`);
+    } else {
+      writeFileSafe(viewFile, viewCode);
+      viewStatus = "created";
+      log.info(`wrote ${viewFile} (${viewCode.length} bytes, first time only)`);
+    }
     tWrite = Date.now() - tW0;
     log.info(`wrote ${outFile} (${code.length} bytes)`);
   } else {
     log.info(`dry-run: would write ${outFile} (${code.length} bytes)`);
+    log.info(
+      `dry-run: ${
+        fs.existsSync(viewFile) ? "would keep existing" : "would create"
+      } ${viewFile} (${viewCode.length} bytes)`
+    );
   }
 
   const total = Date.now() - t0;
@@ -330,9 +369,12 @@ export function runOnce(options: RunOptions): RunResult {
     prefabPath,
     outFile,
     bindPath,
+    viewFile,
     parsed,
     config,
     usedDefault,
+    viewStatus,
+    viewCode,
     issues,
     code,
     durations: { parse: tParse, validate: 0, resolve: tResolve, generate: tGen, write: tWrite, total },
@@ -369,9 +411,12 @@ function earlyError(
     prefabPath,
     outFile: "",
     bindPath: "",
+    viewFile: "",
     parsed: undefined as unknown as ParsedPrefab,
     config: undefined as unknown as BindConfig,
     usedDefault: false,
+    viewStatus: "skipped-exists",
+    viewCode: "",
     issues: [],
     code: "",
     durations: { parse: 0, validate: 0, resolve: 0, generate: 0, write: 0, total: 0 },

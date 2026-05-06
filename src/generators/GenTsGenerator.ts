@@ -1,4 +1,8 @@
-import { type BindConfig, type BindNodeEntry } from "./BindJsonManager.ts";
+import {
+  type BindConfig,
+  type BindNodeEntry,
+  viewClassToBindingsName,
+} from "./BindJsonManager.ts";
 import { type ParsedPrefab } from "../parsers/PrefabParser.ts";
 import { type ComponentTypeInfo, lookupComponentType } from "../parsers/ComponentTypeMap.ts";
 
@@ -31,6 +35,26 @@ function makeTypeResolver(parsed: ParsedPrefab): (rawType: string) => ComponentT
 }
 
 /**
+ * 判断该组件是否需要为它生成 onClick 钩子：
+ *  · cc.Button 内置 → 是
+ *  · 其它 isButton=true 的自定义脚本（即 Button 子类）→ 是
+ */
+function isButtonLikeComponent(info: ComponentTypeInfo): boolean {
+  if (info.builtin) return info.tsName === "Button";
+  return info.isButton === true;
+}
+
+/**
+ * 由字段名生成 onClick 方法名：
+ *   confirmBtn → onClickConfirmBtn
+ *   info/bet 这种已经在 entry.field 阶段 camel 化为 infoBet → onClickInfoBet
+ */
+function onClickMethodName(field: string): string {
+  if (!field) return "onClick";
+  return "onClick" + field.charAt(0).toUpperCase() + field.slice(1);
+}
+
+/**
  * 把 BindConfig + ParsedPrefab 渲染为 PrefabView 的 .gen.ts 代码。
  *
  * 生成的代码原则：
@@ -58,8 +82,24 @@ export function generateGenTs(
 
   const resolveType = makeTypeResolver(parsed);
 
+  /**
+   * 预先把每个 entry 上的"按钮组件"挑出来，确定 onClick 方法名 / 用于 bind() 时的字段。
+   * 一个 entry 通常只挂一个 cc.Button（或 Button 子类），所以一般每个 entry 顶多 1 项。
+   */
+  type ButtonHook = {
+    /** view 里的字段名（例如 "confirmBtn"） */
+    field: string;
+    /** 钩子方法名（例如 "onClickConfirmBtn"） */
+    method: string;
+    /** 为生成更精确注释，挂的是哪个类 */
+    typeName: string;
+  };
+  const buttonHooksPerEntry = new Map<BindNodeEntry, ButtonHook[]>();
+  let needButtonImport = false;
+
   // 收集所有要 import 的类型
   for (const entry of config.nodes) {
+    const hooks: ButtonHook[] = [];
     for (const comp of entry.components ?? []) {
       const info = resolveType(comp.rawType);
       if (!info) continue;
@@ -81,7 +121,21 @@ export function generateGenTs(
           set.add(info.tsName);
         }
       }
+      if (isButtonLikeComponent(info)) {
+        const fieldName = comp.field ?? defaultCompFieldName(entry.field, info.tsName);
+        hooks.push({
+          field: fieldName,
+          method: onClickMethodName(fieldName),
+          typeName: info.tsName,
+        });
+        needButtonImport = true;
+      }
     }
+    if (hooks.length > 0) buttonHooksPerEntry.set(entry, hooks);
+  }
+  if (needButtonImport) {
+    // 即使该 prefab 只用了 Button 子类，事件绑定也走 Button.EventType.CLICK，需要导入 Button
+    importsFromCc.add("Button");
   }
 
   // -------- 文件头 --------
@@ -138,11 +192,20 @@ export function generateGenTs(
   lines.push("");
 
   // -------- PrefabView 类 --------
-  const className = config.viewClassName;
+  // gen.ts 里只放"内部基类"（下划线前缀 = 自动生成），再由开发者持有的 view.ts 继承它。
+  // 这样既保证 onClickXxx 钩子可以通过子类 override，也保证 gen.ts 是 100% 可重新生成的。
+  const viewClass = config.viewClassName;
+  const bindingsClass = viewClassToBindingsName(viewClass);
   lines.push(`const { ccclass } = _decorator;`);
   lines.push("");
-  lines.push(`@ccclass("${className}")`);
-  lines.push(`export class ${className} extends Component {`);
+  lines.push(`/**`);
+  lines.push(` * ${viewClass} 的自动生成基类（不要直接 @ccclass 挂到节点上，请用 ${viewClass}）。`);
+  lines.push(` *`);
+  lines.push(` * 字段 / bind() / onClickXxx 钩子均由 genbot 自动生成；`);
+  lines.push(` * 业务逻辑请在 ${viewClass}.ts 里 override 对应钩子。`);
+  lines.push(` */`);
+  lines.push(`@ccclass("${bindingsClass}")`);
+  lines.push(`export class ${bindingsClass} extends Component {`);
 
   // 字段
   for (const entry of config.nodes) {
@@ -165,7 +228,8 @@ export function generateGenTs(
     "  /**",
     "   * 把运行时 prefab 实例化出的 root Node 绑定到本 View。",
     "   * - 路径在生成期固化，运行时不做字符串拼接；",
-    `   * - 任意 path 找不到节点时，DEV 模式抛错，Release 仅 console.warn。`,
+    `   * - 任意 path 找不到节点时，DEV 模式抛错，Release 仅 console.warn；`,
+    "   * - 自动注册所有 Button / Button 子类 的 click 事件，路由到本类的 onClickXxx 钩子。",
     "   */",
     "  public bind(root: Node): this {",
     "    const w = this as any;",
@@ -209,8 +273,31 @@ export function generateGenTs(
         )}); }`
       );
     }
+    // 注册按钮 click → onClickXxx 钩子
+    const hooks = buttonHooksPerEntry.get(entry);
+    if (hooks && hooks.length > 0) {
+      for (const h of hooks) {
+        // 通过 w[method] 动态查表：保证子类 override 后能拿到最新实现，
+        // 同时避免 TS 在父类里直接 this.onClickXxx 时被 readonly 字段类型干扰。
+        lines.push(
+          `    if (w.${h.field}) { w.${h.field}.node.on(Button.EventType.CLICK, w.${h.method}, w); }`
+        );
+      }
+    }
   }
   lines.push("    return this;", "  }");
+
+  // ---- onClick 钩子方法（默认空实现，view.ts 里 override）----
+  // 把所有钩子集中放在 bind() 之后，便于阅读"业务侧要 override 的接口"。
+  for (const entry of config.nodes) {
+    const hooks = buttonHooksPerEntry.get(entry);
+    if (!hooks) continue;
+    for (const h of hooks) {
+      lines.push("");
+      lines.push(`  /** 默认空实现；在 ${viewClass}.ts 里 override 即可写业务 */`);
+      lines.push(`  protected ${h.method}(): void {}`);
+    }
+  }
 
   lines.push("}");
   lines.push("");

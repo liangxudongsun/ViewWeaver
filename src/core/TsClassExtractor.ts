@@ -35,6 +35,18 @@ export interface TsClassInfo {
   isExported: boolean;
   /** 是否是 `export default` */
   isDefault: boolean;
+  /**
+   * `extends X` 后的基类名（仅字面量，未做 import 重命名解析）。
+   * 用于：识别 cc.Button 子类（基类名为 "Button"）。
+   * 没有 extends 子句时为 undefined。
+   *
+   * 已知局限：
+   *   · 跨文件继承链不会递归解析（A extends B extends Button → 当前只能直接看到 A→B）
+   *   · `import { Button as MyBtn } from "cc"; class X extends MyBtn` 会被识别为 "MyBtn"
+   *   · 命名空间形式 `class X extends cc.Button` 会被识别为 "cc.Button"（含点号）
+   * 这些边缘情况我们另外在 ScriptTypeRegistry 里做归一化处理。
+   */
+  extendsClassName?: string;
   /** 文件绝对路径 */
   filePath: string;
 }
@@ -44,10 +56,10 @@ export interface TsClassInfo {
  * 找不到返回 undefined（说明这个 .ts 不是 Cocos 组件）
  */
 export function extractClassFromContent(content: string, filePath: string): TsClassInfo | undefined {
-  // 单行模式下匹配 @ccclass(...) 后面紧跟的 export class XXX
+  // 单行模式下匹配 @ccclass(...) 后面紧跟的 export class XXX (extends Y)?
   // 装饰器和类定义之间允许有空白行/其它装饰器
   const pattern =
-    /@ccclass\s*(?:\(\s*(?:['"]([^'"]+)['"])?\s*\))?\s*(?:@[A-Za-z_$][\w$]*\s*(?:\([^)]*\))?\s*)*((?:export\s+(?:default\s+)?)?)\s*(?:abstract\s+)?class\s+([A-Za-z_$][\w$]*)/m;
+    /@ccclass\s*(?:\(\s*(?:['"]([^'"]+)['"])?\s*\))?\s*(?:@[A-Za-z_$][\w$]*\s*(?:\([^)]*\))?\s*)*((?:export\s+(?:default\s+)?)?)\s*(?:abstract\s+)?class\s+([A-Za-z_$][\w$]*)(?:\s+extends\s+([A-Za-z_$][\w$.]*))?/m;
 
   const m = content.match(pattern);
   if (!m) return undefined;
@@ -55,6 +67,7 @@ export function extractClassFromContent(content: string, filePath: string): TsCl
   const ccname = m[1];
   const exportPrefix = m[2].trim();
   const className = m[3];
+  const extendsName = m[4];
   const isExported = /\bexport\b/.test(exportPrefix);
   const isDefault = /\bdefault\b/.test(exportPrefix);
 
@@ -63,6 +76,7 @@ export function extractClassFromContent(content: string, filePath: string): TsCl
     ccclassName: ccname || className,
     isExported,
     isDefault,
+    extendsClassName: extendsName,
     filePath,
   };
 }

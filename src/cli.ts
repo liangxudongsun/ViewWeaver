@@ -189,6 +189,7 @@ function main(): void {
       prefabPath: relPosix(projectRoot, prefabPath),
       genTsPath: relPosix(projectRoot, result.outFile),
       bindJsonPath: relPosix(projectRoot, result.bindPath),
+      viewTsPath: relPosix(projectRoot, result.viewFile),
       viewClassName: result.config.viewClassName,
       lastGenAt: new Date().toISOString(),
       lastGenBy: "cli",

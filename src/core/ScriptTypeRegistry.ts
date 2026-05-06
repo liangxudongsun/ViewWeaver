@@ -96,6 +96,11 @@ export class ScriptTypeRegistry {
       importFrom,
       builtin: false,
       isDefaultExport: cls.isDefault,
+      extendsClassName: cls.extendsClassName,
+      // 直接继承自 Button 的脚本视为 Button 子类。
+      // 注意：跨文件多级继承（A → B → Button）当前不递归解析，需要时
+      // 后续可在 v0.3 沿 extendsClassName 链查找。
+      isButton: cls.extendsClassName === "Button" || cls.extendsClassName === "cc.Button",
     };
     this._cache.set(cacheKey, { info, meta, cls });
     return info;

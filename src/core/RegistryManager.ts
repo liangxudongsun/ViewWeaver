@@ -48,7 +48,9 @@ export interface RegistryEntry {
   genTsPath: string;
   /** 相对项目根的 .bind.json 路径 */
   bindJsonPath: string;
-  /** 生成的 PrefabView 类名 */
+  /** 相对项目根的 .view.ts 路径（开发者持有的承基类） */
+  viewTsPath?: string;
+  /** view.ts 中开发者类名（与 bind.json 的 viewClassName 对齐） */
   viewClassName: string;
   /** 上次生成时间（ISO） */
   lastGenAt: string;

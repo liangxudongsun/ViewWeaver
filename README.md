@@ -16,23 +16,29 @@ assets/scripts/_genbot/xxx/
         │
         │  扩展或 CLI 自动生成
         ▼
-  xxx.gen.ts                          (强类型 PrefabView，禁止手改)
+  xxx.gen.ts                          (内部基类 _XxxView，自动生成、禁止手改)
         │
-        │  程序员手写
+        │  首次自动生成；之后由开发者维护
         ▼
-XxxView.ts                            (业务 View，组合 PrefabView)
+  xxx.view.ts                         (业务 View 类 XxxView，extends _XxxView)
 ```
+
+每个 prefab 同目录下生成一对文件：
+- `xxx.gen.ts`：内部基类 `_XxxView`，包含字段、`bind()`、所有 button 的 `onClickXxx()` 默认空实现。每次都重写。
+- `xxx.view.ts`：开发者类 `XxxView extends _XxxView`，**只在首次生成**，之后业务方修改、工具不会再覆盖。
 
 ## 输出布局（v0.2 起约定）
 
 ```
 <project>/assets/scripts/_genbot/
-  __registry.json                     全局索引：prefab → gen.ts 映射
+  __registry.json                     全局索引：prefab → gen.ts / view.ts 映射
   common_ui/
-    common_ui.gen.ts                  强类型 PrefabView 类
+    common_ui.gen.ts                  内部基类 _Common_uiView（自动生成）
+    common_ui.view.ts                 开发者类 Common_uiView（仅首次生成、可手改）
     common_ui.bind.json               节点契约配置
   maingame/
     maingame.gen.ts
+    maingame.view.ts
     maingame.bind.json
   ...
 ```
@@ -159,27 +165,30 @@ v0.2 起的默认规则只挑「按钮」相关：
 
 | 规则 | 说明 |
 |------|------|
-| **触发集合** | 节点必须挂有 `cc.Button` 才会进入默认导出 |
-| **同节点连带** | 触发节点上挂的所有自定义脚本（如 `ButtonScale` / `ButtonChildrenColor`）一并导出 |
+| **触发集合** | 节点必须挂有 `cc.Button` **或 `extends Button` 的自定义脚本**才进入默认导出 |
+| **暴露组件** | 仅暴露 `cc.Button` + Button 子类。**`ButtonScale` / `ButtonChildrenColor` 这类同节点辅助脚本默认不再连带导出**（业务侧需要时用 `view.btn.node.getComponent(ButtonScale)` 即可） |
 | **Node 引用** | 默认 `exposeNode: false`（业务侧用 `view.btn.node` 即可），需要 Node 时在 Inspector 里手动勾选 |
 | **字段命名** | 第一个组件复用节点路径派生名（如 `portraitBottomUIInfoBet`），后续追加 `_TsName` 后缀 |
+| **onClick 自动绑定** | 每个导出的 Button / Button 子类，gen.ts 都会自动定义 `protected onClickXxx(): void {}` 钩子，并在 `bind()` 里注册 `Button.EventType.CLICK`。业务侧只在 view.ts 里 override 想要响应的钩子即可 |
+| **view.ts 一次性** | 首次生成 view.ts 骨架（`extends _XxxView`），**之后工具永不覆盖**；新增 button 仅追加 gen.ts 中的空 hook，需要响应时再手动到 view.ts 里 override |
 
 实测 `common_ui.prefab`（524 节点 / 1160 组件）：
 
 | 项目 | v0.1 全暴露规则 | v0.2 button-only 规则 |
 |------|--------------|--------------------|
 | 节点 entry 数 | 400+ | **74** |
-| 组件 entry 数 | ~800 | **111** |
-| `gen.ts` 行数 | 3589 | **606**（约 1/6） |
+| 组件 entry 数 | ~800 | **74**（每个 button 节点一个 Button） |
+| `gen.ts` 行数 | 3589 | ~600（约 1/6） |
 
 需要恢复全暴露行为时（脚本 / 自动化场景），调用 `makeDefaultBindConfig` 时传：
 
 ```ts
 makeDefaultBindConfig(parsed, {
   ...
-  triggerBuiltinTypes: null,           // 取消触发限制
-  exposedBuiltinTypes: new Set([...]), // 自己列要暴露的内置组件
-  exposeTriggerNode: true,             // 同时把 Node 也暴露出来
+  triggerBuiltinTypes: null,             // 取消触发限制
+  exposedBuiltinTypes: new Set([...]),   // 自己列要暴露的内置组件
+  exposeOtherCustomOnTriggers: true,     // 把其它自定义脚本也带上（ButtonScale 等）
+  exposeTriggerNode: true,               // 同时把 Node 也暴露出来
 });
 ```
 
@@ -188,15 +197,37 @@ Inspector 里依然可以**勾选任何非默认节点**——树永远是完整
 
 ### 业务侧使用生成的代码
 
+业务方挂的是 view.ts 里的开发者类（不是 gen.ts 内部基类）。
+gen.ts 已经把 Button 的 click 事件预先注册到了同名 `onClickXxx` 钩子，业务只 override 想响应的：
+
 ```ts
-import { Common_uiPrefabView } from '../_genbot/common_ui/common_ui.gen';
+// common_ui.view.ts —— genbot 只在第一次生成这个文件，之后由你维护。
+import { _decorator } from "cc";
+import { _Common_uiView } from "./common_ui.gen";
 
-const view = prefabRoot.addComponent(Common_uiPrefabView);
-view.bind(prefabRoot);
+const { ccclass } = _decorator;
 
-// 默认规则下，view 上是按钮组件本身（不是 Node）
-view.portraitBottomUIInfoBet.node.on('click', this.onBet, this);  // .node 拿 Node
-view.portraitBottomUISpin_barBtn_plusButtonScale.scaleAmount = 1.2; // 同节点的 ButtonScale 也一并导出
+@ccclass("Common_uiView")
+export class Common_uiView extends _Common_uiView {
+  // override gen.ts 中已声明的钩子
+  protected onClickPortraitBottomUIInfoBet(): void {
+    console.log("[view] bet button clicked");
+  }
+
+  // 同节点的 ButtonScale 等辅助脚本，按需自取
+  start() {
+    const scale = this.portraitBottomUIInfoBet.node.getComponent("ButtonScale");
+    if (scale) scale.zoomScale = 1.2;
+  }
+}
+```
+
+```ts
+// 业务侧调用方
+import { Common_uiView } from "../_genbot/common_ui/common_ui.view";
+
+const view = prefabRoot.addComponent(Common_uiView);
+view.bind(prefabRoot);   // 来自 _Common_uiView，自动注册所有 button 的 CLICK
 ```
 
 ## 仓库结构

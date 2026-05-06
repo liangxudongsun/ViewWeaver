@@ -58,7 +58,10 @@ export interface MakeDefaultOptions {
   includeRoot?: boolean;
   /**
    * 「触发」内置组件 —— 节点必须挂有其中之一才会进入默认导出。
-   * 默认 `["cc.Button"]`：默认只为按钮节点产出绑定，不污染界面里其它节点。
+   * 默认 `["cc.Button"]` —— 默认只为按钮节点产出绑定。
+   *
+   * 注意：除了这个集合，**任何 `extends Button` 的自定义脚本**也会触发节点导出
+   *（通过 `ComponentTypeInfo.isButton` 标识，由 ScriptTypeRegistry 识别）。
    *
    * 传 `null` 表示取消触发限制（任何节点都可能进入），用于"全量默认"模式。
    */
@@ -70,11 +73,13 @@ export interface MakeDefaultOptions {
    */
   exposedBuiltinTypes?: ReadonlySet<string>;
   /**
-   * 是否在「触发节点」上把所有自定义脚本（非 cc.* 内置）也连带暴露。
-   * 默认 true —— 这样按钮节点上挂的 ButtonScale / ButtonChildrenColor / ButtonSound
-   * 这类业务侧的"按钮增强"脚本会自动导出。
+   * 是否在触发节点上把**任意**自定义脚本（非 Button 子类的那些）一并暴露。
+   * 默认 false —— 只导出 Button 与其子类，不连带 ButtonScale / ButtonSound 这类同节点辅助
+   * 脚本，业务侧需要时用 `view.btn.node.getComponent(ButtonScale)` 即可。
+   *
+   * Button 子类（`isButton === true` 的自定义脚本）任何情况下都会被导出。
    */
-  exposeCustomScriptsOnTriggers?: boolean;
+  exposeOtherCustomOnTriggers?: boolean;
   /**
    * 是否把 Node 本身也暴露到 PrefabView 里（成为 view.xxx: Node）。
    * 默认 false —— 触发节点只暴露其上的组件；需要 Node 时业务侧用 `view.btn.node`。
@@ -82,17 +87,35 @@ export interface MakeDefaultOptions {
   exposeTriggerNode?: boolean;
 }
 
-/** 默认触发集合：只有按钮节点会进入默认导出 */
+/** 默认触发集合：cc.Button（同时 isButton=true 的自定义脚本也是 trigger） */
 const DEFAULT_TRIGGER_BUILTIN: ReadonlySet<string> = new Set([
   "cc.Button",
 ]);
 
-/** 把 prefab 名生成 ViewClass 名 */
+/**
+ * 把 prefab 名生成 view.ts 类名（开发者可见的那个）。
+ * 例：`common_ui` → `Common_uiView`、`maingame` → `MaingameView`。
+ *
+ * 该名字会落到 bind.json / __registry.json 的 `viewClassName` 字段，由 view.ts 引用，
+ * gen.ts 类名再由 `viewClassToBindingsName` 派生（加 _ 前缀）。
+ */
 function prefabNameToClass(prefabName: string): string {
   const id = pathToIdentifier(prefabName, { camel: true });
-  // PrefabView -> 首字母大写 + 后缀 PrefabView
   const pascal = id.charAt(0).toUpperCase() + id.slice(1);
-  return `${pascal}PrefabView`;
+  return `${pascal}View`;
+}
+
+/**
+ * 由 view.ts 类名派生 gen.ts 内部类名。
+ * 约定：下划线前缀 = 内部 / 自动生成（与 JS 业内 "_private" 习惯一致）。
+ *
+ * 例：`Common_uiView` → `_Common_uiView`。
+ * 这两个类成对出现：
+ *   - gen.ts: `export class _Common_uiView extends Component { /* 字段 + bind() *​/ }`
+ *   - view.ts: `export class Common_uiView extends _Common_uiView { /* onClick 实现 *​/ }`
+ */
+export function viewClassToBindingsName(viewClassName: string): string {
+  return `_${viewClassName}`;
 }
 
 /**
@@ -111,7 +134,7 @@ export function makeDefaultBindConfig(parsed: ParsedPrefab, opts: MakeDefaultOpt
       : opts.triggerBuiltinTypes ?? DEFAULT_TRIGGER_BUILTIN;
   // exposed 默认 = trigger 本身（按钮触发就暴露 Button），允许显式覆盖
   const exposed = opts.exposedBuiltinTypes ?? triggerSet ?? new Set<string>();
-  const includeCustom = opts.exposeCustomScriptsOnTriggers ?? true;
+  const includeOtherCustoms = opts.exposeOtherCustomOnTriggers ?? false;
   const exposeNodeFlag = !!opts.exposeTriggerNode;
 
   const nodes: BindNodeEntry[] = [];
@@ -128,11 +151,19 @@ export function makeDefaultBindConfig(parsed: ParsedPrefab, opts: MakeDefaultOpt
     return name;
   }
 
-  /** 该节点是否被「触发组件」勾中？triggerSet === null 视为"任意节点都触发" */
+  /**
+   * 该节点是否被「触发组件」勾中？
+   *  · triggerSet === null：任意节点都触发（用于全暴露模式）
+   *  · 节点上挂有 triggerSet 中任一内置组件 → 触发
+   *  · 节点上挂有 isButton=true 的自定义脚本（Button 子类） → 触发
+   */
   function isTriggerNode(node: ParsedNode): boolean {
     if (triggerSet === null) return true;
     for (const c of node.components) {
-      if (c.typeInfo?.builtin && triggerSet.has(c.rawType)) return true;
+      const ti = c.typeInfo;
+      if (!ti) continue;
+      if (ti.builtin && triggerSet.has(c.rawType)) return true;
+      if (!ti.builtin && ti.isButton) return true; // Button 子类
     }
     return false;
   }
@@ -140,29 +171,36 @@ export function makeDefaultBindConfig(parsed: ParsedPrefab, opts: MakeDefaultOpt
   /**
    * 对触发节点，生成排好序的可导出组件列表：
    *   - 内置组件：仅 exposed 集合里允许的
-   *   - 自定义脚本：includeCustom=true 时全部带上
-   * 返回顺序：内置（trigger 中的优先）→ 自定义脚本（按 tsName 字典序），便于第一项作为基础字段名。
+   *   - 自定义脚本：
+   *       · 是 Button 子类（isButton=true）→ 导出
+   *       · 其它：includeOtherCustoms=true 时才导出（默认 false）
+   * 返回顺序：cc.Button → Button 子类 → 其它内置 → 其它自定义。这样第一项最适合做"基础字段名"。
    */
   function pickExposedComponents(node: ParsedNode): typeof node.components {
-    const trigComps = [];
+    const ccButtons = [];
+    const buttonSubclasses = [];
     const otherBuiltin = [];
-    const customs = [];
+    const otherCustoms = [];
     for (const c of node.components) {
-      if (!c.typeInfo) continue; // 类型未解析，无法生成代码 → 跳过
-      if (c.typeInfo.builtin) {
+      const ti = c.typeInfo;
+      if (!ti) continue; // 类型未解析，无法生成代码 → 跳过
+      if (ti.builtin) {
         if (!exposed.has(c.rawType)) continue;
-        if (triggerSet && triggerSet.has(c.rawType)) trigComps.push(c);
+        if (c.rawType === "cc.Button") ccButtons.push(c);
         else otherBuiltin.push(c);
       } else {
-        if (!includeCustom) continue;
-        customs.push(c);
+        if (ti.isButton) buttonSubclasses.push(c);
+        else if (includeOtherCustoms) otherCustoms.push(c);
       }
     }
-    // 自定义脚本按类名字典序，保持稳定 diff
-    customs.sort((a, b) =>
+    // 自定义按类名字典序，保持稳定 diff
+    buttonSubclasses.sort((a, b) =>
       (a.typeInfo!.tsName).localeCompare(b.typeInfo!.tsName)
     );
-    return [...trigComps, ...otherBuiltin, ...customs];
+    otherCustoms.sort((a, b) =>
+      (a.typeInfo!.tsName).localeCompare(b.typeInfo!.tsName)
+    );
+    return [...ccButtons, ...buttonSubclasses, ...otherBuiltin, ...otherCustoms];
   }
 
   function visit(node: ParsedNode, isRoot: boolean): void {
