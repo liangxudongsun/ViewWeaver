@@ -56,25 +56,35 @@ export interface MakeDefaultOptions {
   includeUnnamed?: boolean;
   /** 是否包含根节点本身，默认 false（根节点常常没有意义） */
   includeRoot?: boolean;
-  /** 自动暴露的内置组件类型（白名单），未列出的则只暴露 Node */
+  /**
+   * 「触发」内置组件 —— 节点必须挂有其中之一才会进入默认导出。
+   * 默认 `["cc.Button"]`：默认只为按钮节点产出绑定，不污染界面里其它节点。
+   *
+   * 传 `null` 表示取消触发限制（任何节点都可能进入），用于"全量默认"模式。
+   */
+  triggerBuiltinTypes?: ReadonlySet<string> | null;
+  /**
+   * 在被触发的节点上，要暴露的内置组件白名单。
+   * 默认 = `triggerBuiltinTypes`（即按钮触发就暴露 Button 本身）。
+   * 设为更大的集合可让按钮节点同时把 Sprite / Label 等也带出来。
+   */
   exposedBuiltinTypes?: ReadonlySet<string>;
+  /**
+   * 是否在「触发节点」上把所有自定义脚本（非 cc.* 内置）也连带暴露。
+   * 默认 true —— 这样按钮节点上挂的 ButtonScale / ButtonChildrenColor / ButtonSound
+   * 这类业务侧的"按钮增强"脚本会自动导出。
+   */
+  exposeCustomScriptsOnTriggers?: boolean;
+  /**
+   * 是否把 Node 本身也暴露到 PrefabView 里（成为 view.xxx: Node）。
+   * 默认 false —— 触发节点只暴露其上的组件；需要 Node 时业务侧用 `view.btn.node`。
+   */
+  exposeTriggerNode?: boolean;
 }
 
-/** 默认暴露的内置组件类型 */
-const DEFAULT_EXPOSED_BUILTIN: ReadonlySet<string> = new Set([
-  "cc.Label",
-  "cc.RichText",
-  "cc.Sprite",
+/** 默认触发集合：只有按钮节点会进入默认导出 */
+const DEFAULT_TRIGGER_BUILTIN: ReadonlySet<string> = new Set([
   "cc.Button",
-  "cc.Toggle",
-  "cc.EditBox",
-  "cc.ProgressBar",
-  "cc.Slider",
-  "cc.ScrollView",
-  "cc.PageView",
-  "cc.Animation",
-  "cc.AnimationController",
-  "sp.Skeleton",
 ]);
 
 /** 把 prefab 名生成 ViewClass 名 */
@@ -85,9 +95,25 @@ function prefabNameToClass(prefabName: string): string {
   return `${pascal}PrefabView`;
 }
 
-/** 根据 ParsedPrefab 生成「全部命名节点 + 白名单组件」的默认配置 */
+/**
+ * 默认导出策略（v0.2 起）：
+ *  1. 节点必须挂有 `triggerBuiltinTypes` 中任一组件（默认 cc.Button）才进入默认导出
+ *  2. 触发节点上：内置组件只暴露 `exposedBuiltinTypes` 里列出的；自定义脚本默认全暴露
+ *  3. Node 本体默认不暴露（业务侧用 `view.btn.node` 即可）
+ *
+ * 这样美术的 prefab 长再多 Sprite/Label/Layout/Widget，工具默认只抓出按钮——
+ * 把"哪些节点要程序员抓"这个决策权握在程序员手里，由 Inspector 勾选扩展。
+ */
 export function makeDefaultBindConfig(parsed: ParsedPrefab, opts: MakeDefaultOptions): BindConfig {
-  const exposed = opts.exposedBuiltinTypes ?? DEFAULT_EXPOSED_BUILTIN;
+  const triggerSet =
+    opts.triggerBuiltinTypes === null
+      ? null // 取消触发限制 = 走"任何节点都可能被默认导出"
+      : opts.triggerBuiltinTypes ?? DEFAULT_TRIGGER_BUILTIN;
+  // exposed 默认 = trigger 本身（按钮触发就暴露 Button），允许显式覆盖
+  const exposed = opts.exposedBuiltinTypes ?? triggerSet ?? new Set<string>();
+  const includeCustom = opts.exposeCustomScriptsOnTriggers ?? true;
+  const exposeNodeFlag = !!opts.exposeTriggerNode;
+
   const nodes: BindNodeEntry[] = [];
   const usedFields = new Set<string>();
 
@@ -102,50 +128,83 @@ export function makeDefaultBindConfig(parsed: ParsedPrefab, opts: MakeDefaultOpt
     return name;
   }
 
+  /** 该节点是否被「触发组件」勾中？triggerSet === null 视为"任意节点都触发" */
+  function isTriggerNode(node: ParsedNode): boolean {
+    if (triggerSet === null) return true;
+    for (const c of node.components) {
+      if (c.typeInfo?.builtin && triggerSet.has(c.rawType)) return true;
+    }
+    return false;
+  }
+
+  /**
+   * 对触发节点，生成排好序的可导出组件列表：
+   *   - 内置组件：仅 exposed 集合里允许的
+   *   - 自定义脚本：includeCustom=true 时全部带上
+   * 返回顺序：内置（trigger 中的优先）→ 自定义脚本（按 tsName 字典序），便于第一项作为基础字段名。
+   */
+  function pickExposedComponents(node: ParsedNode): typeof node.components {
+    const trigComps = [];
+    const otherBuiltin = [];
+    const customs = [];
+    for (const c of node.components) {
+      if (!c.typeInfo) continue; // 类型未解析，无法生成代码 → 跳过
+      if (c.typeInfo.builtin) {
+        if (!exposed.has(c.rawType)) continue;
+        if (triggerSet && triggerSet.has(c.rawType)) trigComps.push(c);
+        else otherBuiltin.push(c);
+      } else {
+        if (!includeCustom) continue;
+        customs.push(c);
+      }
+    }
+    // 自定义脚本按类名字典序，保持稳定 diff
+    customs.sort((a, b) =>
+      (a.typeInfo!.tsName).localeCompare(b.typeInfo!.tsName)
+    );
+    return [...trigComps, ...otherBuiltin, ...customs];
+  }
+
   function visit(node: ParsedNode, isRoot: boolean): void {
-    // 「跳过」分两层语义：
-    //   skipEntry  = 整个 entry 都不输出（无名节点 / 无意义节点）
-    //   skipNodeField = 只是不暴露 Node 字段，但组件还是要保留
-    //
-    // 根节点的特殊性：
-    //   - bind(root: Node) 已经把 root 作为入参，再暴露一个 view.root 是冗余字段；
-    //   - 但根节点上常常挂主控脚本（如 common_ui 的 CommonUI），必须能访问到。
-    // 所以根节点默认 skipNodeField=true，但只要它有可暴露的组件，就保留 entry。
-    const skipEntryBecauseUnnamed =
+    const skipBecauseUnnamed =
       !opts.includeUnnamed && (!node.name || node.name.startsWith("<"));
 
-    if (!skipEntryBecauseUnnamed) {
-      const baseField = isRoot
-        ? uniqueField("$root") // 一个不会冲突的占位字段名
-        : uniqueField(pathToIdentifier(node.path || node.name, { camel: true }));
-      const components: BindComponentEntry[] = [];
-      for (const c of node.components) {
-        if (!c.typeInfo) continue; // 仍然 unknown 的（脚本被删/没源代码）跳过
-        // 白名单逻辑：
-        //  · 内置 cc.* 组件：只暴露白名单里的（避免把 UITransform/Widget 等大量基础组件全导出）
-        //  · 自定义业务脚本：默认全部暴露（typeInfo.builtin === false）
-        if (c.typeInfo.builtin && !exposed.has(c.rawType)) continue;
-        const compFieldName = isRoot
-          ? uniqueField(c.typeInfo.tsName.charAt(0).toLowerCase() + c.typeInfo.tsName.slice(1))
-          : uniqueField(`${baseField}_${c.typeInfo.tsName.replace(/[^A-Za-z0-9_]/g, "_")}`);
-        components.push({
-          rawType: c.rawType,
-          field: compFieldName,
-          index: c.indexAmongSameType,
-        });
-      }
-      // 决定是否输出节点字段：
-      //   - 普通节点：opts.includeRoot/默认行为
-      //   - 根节点：默认不输出节点字段，但若 includeRoot=true 则输出
-      const exposeNode = isRoot ? !!opts.includeRoot : true;
-      // 仅当这个 entry 还有意义（暴露 Node 或者至少一个组件）才输出
-      if (exposeNode || components.length > 0) {
-        nodes.push({
-          path: node.path,
-          field: baseField,
-          exposeNode,
-          components,
-        });
+    if (!skipBecauseUnnamed) {
+      const trigger = isTriggerNode(node);
+      // 根节点特殊：includeRoot=true 时强制纳入；否则按是否触发来决定
+      const includeThisNode = isRoot ? !!opts.includeRoot : trigger;
+
+      if (includeThisNode) {
+        const exposedComps = pickExposedComponents(node);
+        // 没东西可暴露 → 这个 entry 没意义，跳过
+        if (exposedComps.length > 0 || (exposeNodeFlag && !isRoot)) {
+          const baseField = isRoot
+            ? uniqueField("$root")
+            : uniqueField(pathToIdentifier(node.path || node.name, { camel: true }));
+
+          const components: BindComponentEntry[] = [];
+          for (let i = 0; i < exposedComps.length; i++) {
+            const c = exposedComps[i];
+            const tsName = c.typeInfo!.tsName.replace(/[^A-Za-z0-9_]/g, "_");
+            // 第一个组件复用 baseField（最好看的名字）；后续追加 tsName 后缀
+            // baseField 已经 reserve 在 usedFields 里了，所以同名安全
+            const compFieldName =
+              i === 0 ? baseField : uniqueField(`${baseField}_${tsName}`);
+            components.push({
+              rawType: c.rawType,
+              field: compFieldName,
+              index: c.indexAmongSameType,
+            });
+          }
+
+          nodes.push({
+            path: node.path,
+            field: baseField,
+            // 默认不暴露 Node；用户可在 Inspector 里勾选打开
+            exposeNode: !isRoot && exposeNodeFlag,
+            components,
+          });
+        }
       }
     }
 

@@ -146,11 +146,45 @@ npm run build      # → dist/main.js
 
 1. 在 Cocos Assets 面板里**单击**一个 `.prefab` 文件
 2. 右侧 Inspector 面板里出现 `genbot · 导出配置` 区段，自动列出节点树
-3. 勾选 / 取消你要导出的节点和组件（默认勾选规则：所有自定义脚本 + 常用 UI 控件）
+3. 勾选 / 取消你要导出的节点和组件（默认勾选规则见下文「默认导出策略」）
 4. 点 **[生成]** —— 同时落盘 `bind.json` 和 `gen.ts`
 5. 之后业务里 `import { Common_uiPrefabView } from "...common_ui.gen.ts"` 即可
 
 > ⚠️ 注意：勾选某个节点的 `Node` 复选框 = 在 PrefabView 里暴露 `Node` 引用；勾选其上的具体组件复选框 = 暴露该组件引用（如 `view.title : Label`）。两者可独立勾选。
+
+### 默认导出策略
+
+为了避免一个 prefab 把上百个 Sprite/Label/UITransform 全暴露出来污染 PrefabView，
+v0.2 起的默认规则只挑「按钮」相关：
+
+| 规则 | 说明 |
+|------|------|
+| **触发集合** | 节点必须挂有 `cc.Button` 才会进入默认导出 |
+| **同节点连带** | 触发节点上挂的所有自定义脚本（如 `ButtonScale` / `ButtonChildrenColor`）一并导出 |
+| **Node 引用** | 默认 `exposeNode: false`（业务侧用 `view.btn.node` 即可），需要 Node 时在 Inspector 里手动勾选 |
+| **字段命名** | 第一个组件复用节点路径派生名（如 `portraitBottomUIInfoBet`），后续追加 `_TsName` 后缀 |
+
+实测 `common_ui.prefab`（524 节点 / 1160 组件）：
+
+| 项目 | v0.1 全暴露规则 | v0.2 button-only 规则 |
+|------|--------------|--------------------|
+| 节点 entry 数 | 400+ | **74** |
+| 组件 entry 数 | ~800 | **111** |
+| `gen.ts` 行数 | 3589 | **606**（约 1/6） |
+
+需要恢复全暴露行为时（脚本 / 自动化场景），调用 `makeDefaultBindConfig` 时传：
+
+```ts
+makeDefaultBindConfig(parsed, {
+  ...
+  triggerBuiltinTypes: null,           // 取消触发限制
+  exposedBuiltinTypes: new Set([...]), // 自己列要暴露的内置组件
+  exposeTriggerNode: true,             // 同时把 Node 也暴露出来
+});
+```
+
+Inspector 里依然可以**勾选任何非默认节点**——树永远是完整的，默认勾选只是基线，
+任何节点 / 组件都能手动加进 bind.json。
 
 ### 业务侧使用生成的代码
 
@@ -160,13 +194,9 @@ import { Common_uiPrefabView } from '../_genbot/common_ui/common_ui.gen';
 const view = prefabRoot.addComponent(Common_uiPrefabView);
 view.bind(prefabRoot);
 
-// 内置 cc 组件（强类型 .Sprite / .Button / .Label ...）
-view.portraitBottomUIInfoBG_Sprite.spriteFrame = sf;
-view.portraitBottomUISpin_barBtn_plus_Button.node.on('click', this.onPlus, this);
-
-// 业务脚本（v0.2 阶段 3）：
-view.commonUI.someMethod();                  // 根节点上的 CommonUI（default export）
-view.someChild_ButtonScale.scaleAmount = 1.2; // 子节点上的 ButtonScale（named export）
+// 默认规则下，view 上是按钮组件本身（不是 Node）
+view.portraitBottomUIInfoBet.node.on('click', this.onBet, this);  // .node 拿 Node
+view.portraitBottomUISpin_barBtn_plusButtonScale.scaleAmount = 1.2; // 同节点的 ButtonScale 也一并导出
 ```
 
 ## 仓库结构
