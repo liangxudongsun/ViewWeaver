@@ -8,4 +8,11 @@ coverage/
 
 tests/output/
 tests/fixtures/*.prefab
+tests/fixtures/_fake_*/
 !tests/fixtures/.gitkeep
+
+# 本地 smoke 验证输出（指向项目真实 prefab，不入库）
+demo-out/
+
+# v0.2: types/editor.d.ts is the local minimal stub; ignore @cocos/creator-types-installed copy
+# (handled via tsconfig types resolution; nothing to ignore here unless you add bundled .d.ts)

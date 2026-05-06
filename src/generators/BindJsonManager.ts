@@ -103,29 +103,50 @@ export function makeDefaultBindConfig(parsed: ParsedPrefab, opts: MakeDefaultOpt
   }
 
   function visit(node: ParsedNode, isRoot: boolean): void {
-    const skipNode =
-      (isRoot && !opts.includeRoot) ||
-      (!opts.includeUnnamed && (!node.name || node.name.startsWith("<")));
+    // 「跳过」分两层语义：
+    //   skipEntry  = 整个 entry 都不输出（无名节点 / 无意义节点）
+    //   skipNodeField = 只是不暴露 Node 字段，但组件还是要保留
+    //
+    // 根节点的特殊性：
+    //   - bind(root: Node) 已经把 root 作为入参，再暴露一个 view.root 是冗余字段；
+    //   - 但根节点上常常挂主控脚本（如 common_ui 的 CommonUI），必须能访问到。
+    // 所以根节点默认 skipNodeField=true，但只要它有可暴露的组件，就保留 entry。
+    const skipEntryBecauseUnnamed =
+      !opts.includeUnnamed && (!node.name || node.name.startsWith("<"));
 
-    if (!skipNode) {
-      const baseField = uniqueField(pathToIdentifier(node.path || node.name, { camel: true }));
+    if (!skipEntryBecauseUnnamed) {
+      const baseField = isRoot
+        ? uniqueField("$root") // 一个不会冲突的占位字段名
+        : uniqueField(pathToIdentifier(node.path || node.name, { camel: true }));
       const components: BindComponentEntry[] = [];
       for (const c of node.components) {
-        if (!c.typeInfo) continue; // v0.1：默认配置不暴露未知类型
-        if (!exposed.has(c.rawType)) continue;
-        const compFieldBase = uniqueField(`${baseField}_${c.typeInfo.tsName.replace(/[^A-Za-z0-9_]/g, "_")}`);
+        if (!c.typeInfo) continue; // 仍然 unknown 的（脚本被删/没源代码）跳过
+        // 白名单逻辑：
+        //  · 内置 cc.* 组件：只暴露白名单里的（避免把 UITransform/Widget 等大量基础组件全导出）
+        //  · 自定义业务脚本：默认全部暴露（typeInfo.builtin === false）
+        if (c.typeInfo.builtin && !exposed.has(c.rawType)) continue;
+        const compFieldName = isRoot
+          ? uniqueField(c.typeInfo.tsName.charAt(0).toLowerCase() + c.typeInfo.tsName.slice(1))
+          : uniqueField(`${baseField}_${c.typeInfo.tsName.replace(/[^A-Za-z0-9_]/g, "_")}`);
         components.push({
           rawType: c.rawType,
-          field: compFieldBase,
+          field: compFieldName,
           index: c.indexAmongSameType,
         });
       }
-      nodes.push({
-        path: node.path,
-        field: baseField,
-        exposeNode: true,
-        components,
-      });
+      // 决定是否输出节点字段：
+      //   - 普通节点：opts.includeRoot/默认行为
+      //   - 根节点：默认不输出节点字段，但若 includeRoot=true 则输出
+      const exposeNode = isRoot ? !!opts.includeRoot : true;
+      // 仅当这个 entry 还有意义（暴露 Node 或者至少一个组件）才输出
+      if (exposeNode || components.length > 0) {
+        nodes.push({
+          path: node.path,
+          field: baseField,
+          exposeNode,
+          components,
+        });
+      }
     }
 
     for (const ch of node.children) visit(ch, false);

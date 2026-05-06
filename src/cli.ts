@@ -1,45 +1,46 @@
 #!/usr/bin/env node
 /**
- * genbot CLI
+ * genbot CLI（v0.2 重构版）
+ *
+ * 行为变化：
+ * - 输出位置不再默认 prefab 同级，而是写到 <project>/assets/scripts/_genbot/<prefabName>/
+ * - 自动维护 <project>/assets/scripts/_genbot/__registry.json
+ * - 项目根优先取 --project，未传则从 prefab 路径向上推断（找到含 assets/ 的目录）
  *
  * 用法：
- *   node dist/cli.js <prefab-path> [options]
+ *   node --experimental-strip-types src/cli.ts <prefab> [options]
  *
  * Options:
- *   --out <dir>          输出目录，默认 prefab 同级
- *   --bind <path>        指定 bind.json 路径，默认 <prefab>.bind.json
+ *   --project <dir>      项目根目录（含 assets/）。未传则自动推断
+ *   --out <dir>          覆盖默认输出目录（绝对路径），仅 debug 用
+ *   --bind <path>        覆盖 bind.json 路径，仅 debug 用
  *   --regen-bind         即使 bind.json 已存在，也用默认配置覆盖
- *   --save-bind          没有 bind.json 时把生成的默认配置写盘（默认开）
- *   --no-save-bind       关闭自动落盘默认配置
- *   --dump-tree          打印解析后的节点树
- *   --quiet              静默模式，只在出错时输出
- *
- * 输出：
- *   <out>/<prefabName>.gen.ts
- *   <out>/<prefabName>.bind.json     （首次或 --regen-bind）
+ *   --no-save-bind       关闭 bind.json 自动落盘
+ *   --dry-run            只解析与生成代码，不写盘（不更新 registry）
+ *   --dump-tree          打印解析后的节点树到 stderr
+ *   --quiet              静默模式
  */
 
 import * as fs from "node:fs";
 import * as path from "node:path";
-import { parsePrefabFile, dumpTree } from "./parsers/PrefabParser.ts";
+
+import { runOnce, runDumpTree, type Logger, TOOL_VERSION } from "./core/RunOnce.ts";
 import {
-  type BindConfig,
-  deriveBindJsonPath,
-  loadBindConfig,
-  makeDefaultBindConfig,
-  saveBindConfig,
-  validateBindAgainstPrefab,
-} from "./generators/BindJsonManager.ts";
-import { generateGenTs } from "./generators/GenTsGenerator.ts";
-import { writeFileSafe, basenameNoExt } from "./utils/paths.ts";
+  inferProjectRoot,
+  resolvePrefabLayout,
+} from "./core/ProjectLayout.ts";
+import { RegistryManager, type RegistryEntry } from "./core/RegistryManager.ts";
+import { basenameNoExt } from "./utils/paths.ts";
 
 interface CliArgs {
   prefab: string;
+  project?: string;
   out?: string;
   bind?: string;
   regenBind: boolean;
   saveBind: boolean;
   dumpTree: boolean;
+  dryRun: boolean;
   quiet: boolean;
 }
 
@@ -49,11 +50,15 @@ function parseArgs(argv: string[]): CliArgs {
     regenBind: false,
     saveBind: true,
     dumpTree: false,
+    dryRun: false,
     quiet: false,
   };
   for (let i = 0; i < argv.length; i++) {
     const a = argv[i];
     switch (a) {
+      case "--project":
+        args.project = argv[++i];
+        break;
       case "--out":
         args.out = argv[++i];
         break;
@@ -71,6 +76,9 @@ function parseArgs(argv: string[]): CliArgs {
         break;
       case "--dump-tree":
         args.dumpTree = true;
+        break;
+      case "--dry-run":
+        args.dryRun = true;
         break;
       case "--quiet":
         args.quiet = true;
@@ -95,17 +103,20 @@ function parseArgs(argv: string[]): CliArgs {
 function printHelp(): void {
   process.stdout.write(
     [
+      `genbot v${TOOL_VERSION} — Cocos prefab View 代码生成工具`,
+      "",
       "Usage: genbot <prefab> [options]",
       "",
       "Options:",
-      "  --out <dir>      output directory (default: prefab dir)",
-      "  --bind <path>    bind.json path (default: <prefab>.bind.json)",
-      "  --regen-bind     overwrite existing bind.json with default",
-      "  --save-bind      auto save default bind.json when missing (default)",
-      "  --no-save-bind   do not write bind.json automatically",
-      "  --dump-tree      print parsed node tree to stderr",
-      "  --quiet          only print errors",
-      "  -h, --help       this help",
+      "  --project <dir>     project root (default: auto-detect from prefab path)",
+      "  --out <dir>         override output dir (debug)",
+      "  --bind <path>       override bind.json path (debug)",
+      "  --regen-bind        overwrite existing bind.json with default",
+      "  --no-save-bind      do not auto-save default bind.json",
+      "  --dry-run           parse + generate but do not write to disk",
+      "  --dump-tree         print parsed node tree to stderr",
+      "  --quiet             only print errors",
+      "  -h, --help          this help",
       "",
     ].join("\n")
   );
@@ -116,86 +127,81 @@ function fail(msg: string): never {
   process.exit(1);
 }
 
-function log(quiet: boolean, msg: string): void {
-  if (!quiet) process.stdout.write(`${msg}\n`);
+function buildLogger(quiet: boolean): Logger {
+  return {
+    info: (m) => !quiet && process.stdout.write(`[genbot] ${m}\n`),
+    warn: (m) => process.stderr.write(`[genbot] WARN: ${m}\n`),
+    error: (m) => process.stderr.write(`[genbot] ERROR: ${m}\n`),
+  };
 }
 
 function main(): void {
   const args = parseArgs(process.argv.slice(2));
   const prefabPath = path.resolve(args.prefab);
   if (!fs.existsSync(prefabPath)) fail(`prefab not found: ${prefabPath}`);
-
-  const t0 = Date.now();
-  log(args.quiet, `[genbot] parsing ${prefabPath} ...`);
-  const parsed = parsePrefabFile(prefabPath);
-  const tParse = Date.now() - t0;
-  log(
-    args.quiet,
-    `[genbot] parsed in ${tParse}ms: ` +
-      `${parsed.stats.totalRaw} entries → ${parsed.stats.totalNodes} nodes, ` +
-      `${parsed.stats.totalComponents} components ` +
-      `(${parsed.stats.unknownComponents} unknown types)`
-  );
-  if (parsed.stats.unknownTypeNames.length > 0 && !args.quiet) {
-    const sample = parsed.stats.unknownTypeNames.slice(0, 5).join(", ");
-    const more = parsed.stats.unknownTypeNames.length - 5;
-    log(args.quiet, `[genbot]   unknown types: ${sample}${more > 0 ? ` (+${more} more)` : ""}`);
+  if (!prefabPath.endsWith(".prefab")) {
+    process.stderr.write(`[genbot] WARN: file extension is not .prefab — proceeding anyway\n`);
   }
+
+  // 1. 推断项目根
+  const projectRoot = args.project
+    ? path.resolve(args.project)
+    : inferProjectRoot(prefabPath);
+  if (!projectRoot) {
+    fail(
+      `cannot infer project root from prefab path. ` +
+        `pass --project <dir> explicitly. prefab=${prefabPath}`
+    );
+  }
+
+  // 2. 计算输出布局
+  const prefabName = basenameNoExt(prefabPath);
+  const layout = resolvePrefabLayout({ projectRoot, prefabName });
+  const outDir = args.out ? path.resolve(args.out) : layout.outDir;
+  const bindPath = args.bind ? path.resolve(args.bind) : layout.bindJsonPath;
 
   if (args.dumpTree) {
-    process.stderr.write(dumpTree(parsed.root) + "\n");
+    process.stderr.write(runDumpTree(prefabPath) + "\n");
   }
 
-  const bindPath = args.bind ? path.resolve(args.bind) : deriveBindJsonPath(prefabPath);
-  const outDir = args.out ? path.resolve(args.out) : path.dirname(prefabPath);
-  const prefabName = basenameNoExt(prefabPath);
-  const outFile = path.join(outDir, `${prefabName}.gen.ts`);
+  // 3. 跑核心生成流程
+  const logger = buildLogger(args.quiet);
+  const result = runOnce({
+    prefabPath,
+    outDir,
+    bindPath,
+    regenBind: args.regenBind,
+    saveBindIfMissing: args.saveBind,
+    mode: args.dryRun ? "dry-run" : "write",
+    logger,
+    toolVersion: TOOL_VERSION,
+  });
 
-  let config: BindConfig;
-  let usedDefault = false;
-  const existing = !args.regenBind ? loadBindConfig(bindPath) : undefined;
-  if (existing) {
-    log(args.quiet, `[genbot] loaded bind config: ${bindPath}`);
-    config = existing;
-    // 校验
-    const issues = validateBindAgainstPrefab(config, parsed);
-    if (issues.length > 0) {
-      const errs = issues.filter((i) => i.level === "error");
-      if (errs.length > 0) {
-        process.stderr.write(`[genbot] bind config has ${errs.length} error(s):\n`);
-        for (const e of errs) {
-          process.stderr.write(`  - ${e.message}\n`);
-        }
-        fail("aborting due to bind validation errors");
-      }
-      for (const w of issues) {
-        process.stderr.write(`[genbot] WARN: ${w.message}\n`);
-      }
-    }
-  } else {
-    log(args.quiet, `[genbot] no bind config found, creating default ...`);
-    usedDefault = true;
-    // prefab 相对路径：尝试相对 cwd
-    const prefabRel = path.relative(process.cwd(), prefabPath).replace(/\\/g, "/");
-    const outRel = path.relative(process.cwd(), outFile).replace(/\\/g, "/");
-    config = makeDefaultBindConfig(parsed, {
-      prefabRelativePath: prefabRel,
-      outputPath: outRel,
-    });
-    if (args.saveBind) {
-      saveBindConfig(bindPath, config);
-      log(args.quiet, `[genbot] wrote default bind config: ${bindPath}`);
-    }
+  if (!result.ok) {
+    fail(result.error?.message ?? "unknown error");
   }
 
-  // 生成 gen.ts
-  const code = generateGenTs(config, parsed, { toolVersion: "0.1.0" });
-  writeFileSafe(outFile, code);
-  log(args.quiet, `[genbot] wrote ${outFile} (${code.length} bytes)`);
-  log(
-    args.quiet,
-    `[genbot] done in ${Date.now() - t0}ms${usedDefault ? " (default config)" : ""}`
-  );
+  // 4. 更新 registry（dry-run 不更新）
+  if (!args.dryRun) {
+    const registry = new RegistryManager(projectRoot);
+    const entry: RegistryEntry = {
+      prefabName: layout.prefabName,
+      prefabPath: relPosix(projectRoot, prefabPath),
+      genTsPath: relPosix(projectRoot, result.outFile),
+      bindJsonPath: relPosix(projectRoot, result.bindPath),
+      viewClassName: result.config.viewClassName,
+      lastGenAt: new Date().toISOString(),
+      lastGenBy: "cli",
+    };
+    registry.upsert(entry);
+    if (!args.quiet) {
+      process.stdout.write(`[genbot] registry updated: ${registry.path}\n`);
+    }
+  }
+}
+
+function relPosix(root: string, abs: string): string {
+  return path.relative(root, abs).replace(/\\/g, "/");
 }
 
 try {

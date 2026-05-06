@@ -13,6 +13,13 @@ export interface ComponentTypeInfo {
   importFrom: "cc" | string;
   /** 是否原生 cc 组件 */
   builtin: boolean;
+  /**
+   * 该脚本是否使用 `export default class` —— 影响 import 语法：
+   *   true  → `import Foo from "..."`
+   *   false → `import { Foo } from "..."`（命名导出，默认）
+   * 仅对自定义脚本有意义；cc.* 都是命名导出。
+   */
+  isDefaultExport?: boolean;
 }
 
 /**
