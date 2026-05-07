@@ -236,6 +236,36 @@ test("generateGenTs: button-only default produces parseable TS with Button impor
   }
 });
 
+test("generateGenTs: gen.ts implements IView contract (no duck typing)", () => {
+  // 这条契约保护：消费侧（Tester / Presenter / 加载器）依赖 IView 接口而不是
+  // ad-hoc `Component & { bind?: ... }`。如果生成器漏写 implements，编译期不会
+  // 报错（结构等价仍然通过），但消费侧的"接口约定"承诺就破了 —— 故在此显式断言。
+  const parsed = parsePrefab(buildSyntheticPrefab() as never);
+  const cfg = makeDefaultBindConfig(parsed, {
+    prefabRelativePath: "panel.prefab",
+    outputPath: "panel.gen.ts",
+  });
+  const code = generateGenTs(cfg, parsed);
+
+  // 1. import 顶部必须 import IView
+  assert(
+    /import\s+type\s*\{\s*IView\s*\}\s*from\s*"\.\.\/IView"/.test(code),
+    "should import IView type from ../IView"
+  );
+
+  // 2. class 声明必须 implements IView（与 extends Component 同行）
+  assert(
+    /export\s+class\s+_\w+\s+extends\s+Component\s+implements\s+IView\s*\{/.test(code),
+    "generated _XxxView class should `extends Component implements IView`"
+  );
+
+  // 3. bind 签名要兼容 IView.bind(root: Node)：参数 root: Node 必须存在
+  assert(
+    /public\s+bind\s*\(\s*root\s*:\s*Node\s*\)/.test(code),
+    "bind signature must take (root: Node) to satisfy IView.bind"
+  );
+});
+
 test("generateGenTs: emits onClickXxx hook + Button.EventType.CLICK binding for cc.Button", () => {
   const parsed = parsePrefab(buildSyntheticPrefab() as never);
   const cfg = makeDefaultBindConfig(parsed, {

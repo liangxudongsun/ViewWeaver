@@ -161,6 +161,11 @@ export function generateGenTs(
   if (importsFromSp.size > 0) {
     lines.push(`import { sp } from "cc";`);
   }
+  // IView 契约：所有 genbot 生成的 view 都必须 implements 它。
+  // 路径相对于 .gen.ts —— 当前固定为 `_genbot/<prefab>/<name>.gen.ts`，
+  // 所以从这个位置看 IView.ts 就是上一级目录。如果未来 ProjectLayout
+  // 改了输出布局，要把这条路径也跟着调（最直接的做法是把它做成 layout 的字段）。
+  lines.push(`import type { IView } from "../IView";`);
   // 自定义脚本：合并 default + named，按相对路径排序输出
   const customPaths = new Set<string>([
     ...customNamedImports.keys(),
@@ -203,9 +208,12 @@ export function generateGenTs(
   lines.push(` *`);
   lines.push(` * 字段 / bind() / onClickXxx 钩子均由 genbot 自动生成；`);
   lines.push(` * 业务逻辑请在 ${viewClass}.ts 里 override 对应钩子。`);
+  lines.push(` *`);
+  lines.push(` * 实现 IView 契约 —— 编译期保证 bind(root: Node) 签名稳定，让消费侧（Presenter / Tester）`);
+  lines.push(` * 不再依赖 duck typing。bind 的具体实现由 genbot 注入到下面。`);
   lines.push(` */`);
   lines.push(`@ccclass("${bindingsClass}")`);
-  lines.push(`export class ${bindingsClass} extends Component {`);
+  lines.push(`export class ${bindingsClass} extends Component implements IView {`);
 
   // 字段
   for (const entry of config.nodes) {
