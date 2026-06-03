@@ -236,3 +236,24 @@
 3. 项目顶层目前没有 `docs/`，独立维护成本高。
 
 **推翻条件**：项目级文档体系建立后，可能会把跨模块的"05-context.md"上提；anim 自身的 contract / compose / cookbook 仍留在 anim/docs/。
+
+---
+
+### Decision-12: Timeline event 走 AnimEventScope，而非 ctx 散 callback
+
+**决定**：play() 内部的命名时刻用 `AnimEventId` + `AnimEventScope.emit()` + `bindAnimEventHandlers()`；**不在** `IAnimBuildContext` 上挂 `onXxx?: () => void` 匿名 callback。
+
+**备选方案**：
+- A. **AnimEventScope + spec 表**（当前选择）；
+- B. **ctx 上 optional callback**（wheelboard 现状：`onSymbolDrop?`）；
+- C. **全局 EventBus**（跨 anim 会话，难追踪生命周期）。
+
+**选 A 的理由**：
+
+1. **可发现**：event id 常量 + `AnimEventSpec` + grep handler 注册块；
+2. **motion 层业务无关**：只 `emit(id, payload)`，不知拖尾/smart 是什么；
+3. **与 compose 边界清晰**：起止用 seq/par，过程 marker 用 event；
+4. **类型可扩展**：业务域 `Record<AnimEventId, Payload>` 而不污染 common。
+
+**推翻条件**：event 数量极少且永不增长，spec 表维护成本高于闭包（unlikely）。
+
