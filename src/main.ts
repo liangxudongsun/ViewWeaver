@@ -123,6 +123,28 @@ const log = {
 };
 
 // =====================================================================
+// 结果弹窗封装
+//
+// 统一所有 Editor.Dialog 的入口，保证：
+//   1. 只有一个「确定」按钮（历史上不传 buttons 时会渲染成 "Cancel"，语义不对）；
+//   2. 手动触发（右键 / 菜单）才弹窗；AI / 自动化调用一律静默（只写 console）。
+// =====================================================================
+
+/** 单一确认按钮文案，避免默认渲染成 Cancel */
+const OK_BUTTONS = ["确定"];
+
+/** 只在非静默模式下弹结果窗；静默模式仅落 console。 */
+function showDialog(
+  kind: "info" | "warn" | "error",
+  message: string,
+  detail: string,
+  opts?: { silent?: boolean }
+): void {
+  if (opts?.silent) return;
+  Editor.Dialog[kind](message, { detail, buttons: OK_BUTTONS, default: 0 });
+}
+
+// =====================================================================
 // 扩展运行时状态
 // =====================================================================
 
@@ -167,7 +189,7 @@ export const methods = {
       notifyResult(result);
     } catch (e) {
       log.error(`generateFromAsset error:`, (e as Error).stack ?? e);
-      Editor.Dialog.error("genbot 生成失败", { detail: (e as Error).message });
+      showDialog("error", "genbot 生成失败", (e as Error).message);
     }
   },
 
@@ -184,9 +206,11 @@ export const methods = {
       const registry = new RegistryManager(root);
       const entries = registry.list();
       if (entries.length === 0) {
-        await Editor.Dialog.info("genbot", {
-          detail: "registry 为空，没有可重生的 prefab。\n请先用右键菜单生成至少一个 prefab。",
-        });
+        showDialog(
+          "info",
+          "genbot",
+          "registry 为空，没有可重生的 prefab。\n请先用右键菜单生成至少一个 prefab。"
+        );
         return;
       }
       log.info(`regenerating ${entries.length} prefab(s) ...`);
@@ -215,11 +239,14 @@ export const methods = {
       const detail = results
         .map((r) => `  ${r.ok ? "✓" : "✗"} ${r.name}  ${r.msg}`)
         .join("\n");
-      const fn = failCount > 0 ? Editor.Dialog.warn : Editor.Dialog.info;
-      await fn(`genbot 全量重生：${okCount} 成功 / ${failCount} 失败`, { detail });
+      showDialog(
+        failCount > 0 ? "warn" : "info",
+        `genbot 全量重生：${okCount} 成功 / ${failCount} 失败`,
+        detail
+      );
     } catch (e) {
       log.error(`regenerateAll error:`, (e as Error).stack ?? e);
-      Editor.Dialog.error("genbot 全量重生失败", { detail: (e as Error).message });
+      showDialog("error", "genbot 全量重生失败", (e as Error).message);
     }
   },
 
@@ -230,7 +257,7 @@ export const methods = {
       const registry = new RegistryManager(root);
       const entries = registry.list();
       if (entries.length === 0) {
-        await Editor.Dialog.info("genbot", { detail: "registry 为空" });
+        showDialog("info", "genbot", "registry 为空");
         return;
       }
       const lines: string[] = [];
@@ -261,12 +288,10 @@ export const methods = {
           lines.push(`✓ ${e.prefabName}`);
         }
       }
-      await Editor.Dialog.info(`genbot 校验完成（${entries.length}）`, {
-        detail: lines.join("\n"),
-      });
+      showDialog("info", `genbot 校验完成（${entries.length}）`, lines.join("\n"));
     } catch (e) {
       log.error(`validateAll error:`, (e as Error).stack ?? e);
-      Editor.Dialog.error("genbot 校验失败", { detail: (e as Error).message });
+      showDialog("error", "genbot 校验失败", (e as Error).message);
     }
   },
 
@@ -293,6 +318,48 @@ export const methods = {
   setAutoRegenOnSave(enabled: boolean): void {
     state.autoRegenOnSave = !!enabled;
     log.info(`auto-regen on save: ${state.autoRegenOnSave ? "ON" : "OFF"}`);
+  },
+
+  /**
+   * AI / 自动化专用生成入口（无弹窗）。
+   *
+   * 与 `generateFromAsset`（手动右键）行为一致，但：
+   *   · 全程不弹任何 Editor.Dialog，只写 console + 返回结构化结果；
+   *   · 不依赖当前 selection，必须显式给出目标 prefab。
+   *
+   * 入参可为下列任一形式（按顺序尝试解析）：
+   *   · prefab 的 uuid 字符串
+   *   · prefab 的磁盘绝对路径（以 .prefab 结尾）
+   *   · 对象 { uuid?, prefabPath?, file? }
+   *
+   * @returns 结构化结果，永不 throw（异常收敛进 error 字段）。
+   */
+  async generateForAI(...args: unknown[]): Promise<ApplyAndGenerateResult> {
+    try {
+      const prefabAbs = await resolvePrefabArg(args);
+      if (!prefabAbs) {
+        return {
+          ok: false,
+          prefabName: "?",
+          error: {
+            phase: "input",
+            message:
+              "未能解析目标 prefab。请传入 prefab 的 uuid、.prefab 绝对路径，或 { uuid | prefabPath }。",
+          },
+        };
+      }
+      const result = await generateOne(prefabAbs, "ai");
+      // 静默：AI 调用不弹窗，仅日志已在 generateOne / notifyResult 内落 console
+      notifyResult(result, { silent: true });
+      return toApplyResult(result);
+    } catch (e) {
+      log.error(`generateForAI error:`, (e as Error).stack ?? e);
+      return {
+        ok: false,
+        prefabName: "?",
+        error: { phase: "fs", message: (e as Error).message },
+      };
+    }
   },
 
   // ===================================================================
@@ -579,6 +646,50 @@ async function resolveSelectedPrefab(args: unknown[]): Promise<string | undefine
   return undefined;
 }
 
+/**
+ * AI / 自动化入口用的 prefab 解析：不看 selection，只认显式入参。
+ * 支持 uuid 字符串、.prefab 绝对路径、或 { uuid | prefabPath | file } 对象。
+ */
+async function resolvePrefabArg(args: unknown[]): Promise<string | undefined> {
+  const tryPath = (p?: unknown): string | undefined =>
+    typeof p === "string" && p.endsWith(".prefab") && fs.existsSync(p) ? p : undefined;
+
+  for (const a of args) {
+    if (typeof a === "string" && a.length > 0) {
+      // 先当磁盘路径，再当 uuid
+      const asPath = tryPath(a);
+      if (asPath) return asPath;
+      const info = await queryAssetInfo(a);
+      if (info?.file?.endsWith(".prefab")) return info.file;
+    } else if (a && typeof a === "object") {
+      const o = a as { uuid?: string; prefabPath?: string; file?: string };
+      const asPath = tryPath(o.prefabPath) ?? tryPath(o.file);
+      if (asPath) return asPath;
+      if (o.uuid) {
+        const info = await queryAssetInfo(o.uuid);
+        if (info?.file?.endsWith(".prefab")) return info.file;
+      }
+    }
+  }
+  return undefined;
+}
+
+/** 把内部 GenerateResult 收敛成对外（AI / inspector）稳定的结构化结果 */
+function toApplyResult(r: GenerateResult): ApplyAndGenerateResult {
+  if (!r.ok) {
+    return { ok: false, prefabName: r.prefabName, error: r.error };
+  }
+  return {
+    ok: true,
+    prefabName: r.prefabName,
+    outFile: r.outFile,
+    durations: r.durations,
+    scriptResolve: r.scriptResolve
+      ? { resolved: r.scriptResolve.resolved, totalUnknown: r.scriptResolve.totalUnknown }
+      : undefined,
+  };
+}
+
 async function queryAssetInfo(uuid: string): Promise<AssetInfo | undefined> {
   try {
     const info = await Editor.Message.request<AssetInfo | null>(
@@ -604,7 +715,7 @@ interface GenerateResult {
 
 async function generateOne(
   prefabAbs: string,
-  source: "extension" | "auto-watch"
+  source: "extension" | "auto-watch" | "ai"
 ): Promise<GenerateResult> {
   const root = mustProjectRoot();
   const prefabName = basenameNoExt(prefabAbs);
@@ -677,16 +788,22 @@ async function generateOne(
   };
 }
 
-function notifyResult(r: GenerateResult): void {
+function notifyResult(r: GenerateResult, opts?: { silent?: boolean }): void {
   if (r.ok) {
     log.info(`✓ ${r.prefabName}  ${r.durations.total}ms  ${r.code.length}B  → ${r.outFile}`);
-    Editor.Dialog.info(`genbot 生成成功`, {
-      detail: `${r.prefabName}\n  ${r.durations.total}ms\n  ${r.code.length} bytes\n  ${r.outFile}`,
-    });
+    showDialog(
+      "info",
+      `genbot 生成成功`,
+      `${r.prefabName}\n  ${r.durations.total}ms\n  ${r.code.length} bytes\n  ${r.outFile}`,
+      opts
+    );
   } else {
-    Editor.Dialog.error("genbot 生成失败", {
-      detail: `${r.prefabName}\n  ${r.error?.phase}: ${r.error?.message}`,
-    });
+    showDialog(
+      "error",
+      "genbot 生成失败",
+      `${r.prefabName}\n  ${r.error?.phase}: ${r.error?.message}`,
+      opts
+    );
   }
 }
 
@@ -718,7 +835,7 @@ function silentLogger(): Logger {
 
 function warn(msg: string): void {
   log.warn(msg);
-  Editor.Dialog.warn("genbot", { detail: msg });
+  showDialog("warn", "genbot", msg);
 }
 
 // =====================================================================
