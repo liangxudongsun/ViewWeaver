@@ -67,11 +67,11 @@ interface UITransformDumpLite {
 
 export const $ = {
   // 用一块 host 容器，由我们把 UITransform 各字段一个一个 ui-prop 渲染回去
-  fieldHost: ".genbot-fields",
-  hint: ".genbot-node-hint",
-  hintText: ".genbot-node-text",
-  toggleBtn: ".genbot-node-toggle",
-  openBtn: ".genbot-node-open",
+  fieldHost: ".viewweaver-fields",
+  hint: ".viewweaver-node-hint",
+  hintText: ".viewweaver-node-text",
+  toggleBtn: ".viewweaver-node-toggle",
+  openBtn: ".viewweaver-node-open",
 };
 
 // 注意：cocos 一旦看到我们 register 了 cc.UITransform 的 inspector，
@@ -81,26 +81,26 @@ export const $ = {
 // UITransform 加新字段是稳健的。
 export const template = `
 <style>
-.genbot-fields { display: block; }
-.genbot-node-hint {
+.viewweaver-fields { display: block; }
+.viewweaver-node-hint {
   display: flex; flex-direction: row; align-items: center; gap: 4px;
   font-size: 11px; padding: 4px 6px; margin-top: 6px;
   border-top: 1px dashed var(--color-normal-border, rgba(255,255,255,0.12));
   border-radius: 0;
   opacity: 0.95;
 }
-.genbot-node-hint .genbot-node-text { flex: 1; opacity: 0.85; }
-.genbot-node-hint .spacer { flex: 1; }
-.genbot-node-hint.exported .genbot-node-text { color: var(--color-success-fill, #6dc06d); }
-.genbot-node-hint.warn .genbot-node-text { color: var(--color-warn-fill, #d6a13a); }
-.genbot-node-hint.dim { opacity: 0.55; }
+.viewweaver-node-hint .viewweaver-node-text { flex: 1; opacity: 0.85; }
+.viewweaver-node-hint .spacer { flex: 1; }
+.viewweaver-node-hint.exported .viewweaver-node-text { color: var(--color-success-fill, #6dc06d); }
+.viewweaver-node-hint.warn .viewweaver-node-text { color: var(--color-warn-fill, #d6a13a); }
+.viewweaver-node-hint.dim { opacity: 0.55; }
 </style>
-<div class="genbot-fields"></div>
-<div class="genbot-node-hint">
-  <span class="genbot-node-text">…</span>
+<div class="viewweaver-fields"></div>
+<div class="viewweaver-node-hint">
+  <span class="viewweaver-node-text">…</span>
   <span class="spacer"></span>
-  <ui-button class="genbot-node-toggle small" hidden></ui-button>
-  <ui-button class="genbot-node-open small" hidden>定位 prefab</ui-button>
+  <ui-button class="viewweaver-node-toggle small" hidden></ui-button>
+  <ui-button class="viewweaver-node-open small" hidden>定位 prefab</ui-button>
 </div>
 `;
 
@@ -141,14 +141,14 @@ export function ready(this: PanelThis): void {
     if (!this.context) return;
     // 当前 button 文案是 "+ 加入 bind.json" 时 expose=true，否则取消导出
     const currentlyExported = toggle.getAttribute("data-exported") === "1";
-    const r = (await Editor.Message.request("genbot", "toggle-node-export", {
+    const r = (await Editor.Message.request("viewweaver", "toggle-node-export", {
       prefabUuid: this.context.prefabUuid,
       nodePath: this.context.nodePath,
       expose: !currentlyExported,
     })) as ToggleResult;
     if (!r.ok) {
       const text = this.$.hintText as HTMLElement;
-      text.textContent = `genbot: 操作失败 ${r.message ?? ""}`;
+      text.textContent = `ViewWeaver: 操作失败 ${r.message ?? ""}`;
     } else {
       // 重新拉一次状态
       await refreshStatus(this);
@@ -260,11 +260,11 @@ async function refreshStatus(panel: PanelThis): Promise<void> {
 
   if (!panel.context) {
     hint.classList.add("dim");
-    text.textContent = "genbot: 不在 prefab 编辑模式 — 双击 prefab 进入或在 Assets 面板选中 prefab";
+    text.textContent = "ViewWeaver: 不在 prefab 编辑模式 — 双击 prefab 进入或在 Assets 面板选中 prefab";
     return;
   }
 
-  const status = (await Editor.Message.request("genbot", "query-node-status", {
+  const status = (await Editor.Message.request("viewweaver", "query-node-status", {
     prefabUuid: panel.context.prefabUuid,
     nodePath: panel.context.nodePath,
   })) as NodeStatusResult;
@@ -273,7 +273,7 @@ async function refreshStatus(panel: PanelThis): Promise<void> {
 
   if (!status.hasBindJson) {
     hint.classList.add("warn");
-    text.textContent = `genbot: bind.json 不存在 (${shortPath(panel.context.nodePath)})`;
+    text.textContent = `ViewWeaver: bind.json 不存在 (${shortPath(panel.context.nodePath)})`;
     toggle.removeAttribute("hidden");
     toggle.textContent = "+ 加入 bind.json";
     toggle.setAttribute("data-exported", "0");
@@ -284,12 +284,12 @@ async function refreshStatus(panel: PanelThis): Promise<void> {
     hint.classList.add("exported");
     const compCount = status.exposedComponents?.length ?? 0;
     const compTip = compCount ? ` · 含 ${compCount} 组件` : "";
-    text.textContent = `genbot: ✓ 导出为 ${status.field ?? "?"}${compTip}`;
+    text.textContent = `ViewWeaver: ✓ 导出为 ${status.field ?? "?"}${compTip}`;
     toggle.removeAttribute("hidden");
     toggle.textContent = "− 取消导出";
     toggle.setAttribute("data-exported", "1");
   } else {
-    text.textContent = `genbot: ☐ 未导出 (${shortPath(panel.context.nodePath)})`;
+    text.textContent = `ViewWeaver: ☐ 未导出 (${shortPath(panel.context.nodePath)})`;
     toggle.removeAttribute("hidden");
     toggle.textContent = "+ 加入 bind.json";
     toggle.setAttribute("data-exported", "0");

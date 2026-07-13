@@ -1,5 +1,5 @@
 /**
- * genbot 核心执行入口（无外部 IO 依赖，可被 CLI / Cocos 扩展 / 测试共用）
+ * ViewWeaver 核心执行入口（无外部 IO 依赖，可被 CLI / Cocos 扩展 / 测试共用）
  *
  * 设计要点：
  * - 不直接 process.exit / console.log，所有可观察行为通过 logger 回调

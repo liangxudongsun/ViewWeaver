@@ -2,10 +2,10 @@
  * Cocos Creator 编辑器扩展入口
  *
  * 触发方式（在 package.json contributions 里都已声明）：
- *  · 资源面板右键 prefab → "genbot: 生成 PrefabView"      → generateFromAsset
- *  · 顶部菜单 Tools > genbot > 打开面板                  → openPanel
- *  · 顶部菜单 Tools > genbot > 全量重生                  → regenerateAll
- *  · 顶部菜单 Tools > genbot > 校验所有                  → validateAll
+ *  · 资源面板右键 prefab → "ViewWeaver: 生成 PrefabView"      → generateFromAsset
+ *  · 顶部菜单 Tools > ViewWeaver > 打开面板                  → openPanel
+ *  · 顶部菜单 Tools > ViewWeaver > 全量重生                  → regenerateAll
+ *  · 顶部菜单 Tools > ViewWeaver > 校验所有                  → validateAll
  *  · prefab 文件改动监听（默认关闭，开关在面板里）       → onAssetChange
  */
 
@@ -117,9 +117,9 @@ interface NodeStatusResult {
 // =====================================================================
 
 const log = {
-  info: (...args: unknown[]): void => console.log("[genbot]", ...args),
-  warn: (...args: unknown[]): void => console.warn("[genbot]", ...args),
-  error: (...args: unknown[]): void => console.error("[genbot]", ...args),
+  info: (...args: unknown[]): void => console.log("[viewweaver]", ...args),
+  warn: (...args: unknown[]): void => console.warn("[viewweaver]", ...args),
+  error: (...args: unknown[]): void => console.error("[viewweaver]", ...args),
 };
 
 // =====================================================================
@@ -189,13 +189,13 @@ export const methods = {
       notifyResult(result);
     } catch (e) {
       log.error(`generateFromAsset error:`, (e as Error).stack ?? e);
-      showDialog("error", "genbot 生成失败", (e as Error).message);
+      showDialog("error", "ViewWeaver 生成失败", (e as Error).message);
     }
   },
 
   /** 顶部菜单：打开面板（v0.2 阶段 2 才会真正实现 panel 内容） */
   openPanel(): void {
-    Editor.Message.send("genbot", "open-panel");
+    Editor.Message.send("viewweaver", "open-panel");
     log.warn(`panel 尚未实现（v0.2 阶段 2）。当前可用：右键 prefab → 生成 PrefabView`);
   },
 
@@ -208,7 +208,7 @@ export const methods = {
       if (entries.length === 0) {
         showDialog(
           "info",
-          "genbot",
+          "viewweaver",
           "registry 为空，没有可重生的 prefab。\n请先用右键菜单生成至少一个 prefab。"
         );
         return;
@@ -241,12 +241,12 @@ export const methods = {
         .join("\n");
       showDialog(
         failCount > 0 ? "warn" : "info",
-        `genbot 全量重生：${okCount} 成功 / ${failCount} 失败`,
+        `ViewWeaver 全量重生：${okCount} 成功 / ${failCount} 失败`,
         detail
       );
     } catch (e) {
       log.error(`regenerateAll error:`, (e as Error).stack ?? e);
-      showDialog("error", "genbot 全量重生失败", (e as Error).message);
+      showDialog("error", "ViewWeaver 全量重生失败", (e as Error).message);
     }
   },
 
@@ -257,7 +257,7 @@ export const methods = {
       const registry = new RegistryManager(root);
       const entries = registry.list();
       if (entries.length === 0) {
-        showDialog("info", "genbot", "registry 为空");
+        showDialog("info", "viewweaver", "registry 为空");
         return;
       }
       const lines: string[] = [];
@@ -288,10 +288,10 @@ export const methods = {
           lines.push(`✓ ${e.prefabName}`);
         }
       }
-      showDialog("info", `genbot 校验完成（${entries.length}）`, lines.join("\n"));
+      showDialog("info", `ViewWeaver 校验完成（${entries.length}）`, lines.join("\n"));
     } catch (e) {
       log.error(`validateAll error:`, (e as Error).stack ?? e);
-      showDialog("error", "genbot 校验失败", (e as Error).message);
+      showDialog("error", "ViewWeaver 校验失败", (e as Error).message);
     }
   },
 
@@ -793,14 +793,14 @@ function notifyResult(r: GenerateResult, opts?: { silent?: boolean }): void {
     log.info(`✓ ${r.prefabName}  ${r.durations.total}ms  ${r.code.length}B  → ${r.outFile}`);
     showDialog(
       "info",
-      `genbot 生成成功`,
+      `ViewWeaver 生成成功`,
       `${r.prefabName}\n  ${r.durations.total}ms\n  ${r.code.length} bytes\n  ${r.outFile}`,
       opts
     );
   } else {
     showDialog(
       "error",
-      "genbot 生成失败",
+      "ViewWeaver 生成失败",
       `${r.prefabName}\n  ${r.error?.phase}: ${r.error?.message}`,
       opts
     );
@@ -835,7 +835,7 @@ function silentLogger(): Logger {
 
 function warn(msg: string): void {
   log.warn(msg);
-  showDialog("warn", "genbot", msg);
+  showDialog("warn", "viewweaver", msg);
 }
 
 // =====================================================================

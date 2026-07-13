@@ -11,7 +11,7 @@
 
 ```
 extensions/genbot/
-├── src/                    # 编辑器扩展：prefab → view 代码生成器（"genbot" 本职）
+├── src/                    # 编辑器扩展：prefab → view 代码生成器（"viewweaver" 本职）
 ├── assets/                 # 扩展资源（panel UI、菜单图标等）
 ├── tests/                  # 扩展逻辑的单元测试
 ├── docs/                   # ← 框架级设计文档（你现在在这里）
@@ -32,7 +32,7 @@ extensions/genbot/
 
 V1 范围：核心契约 + 编排 + 无限动画支持（已完成）；后续 phase 推进属性 tween 原语、节点 sugar、Cocos 系统包装、遗留工具适配、easing 扩展、单元测试。
 
-### genbot 自身（prefab → view 代码生成器）
+### ViewWeaver 自身（prefab → view 代码生成器）
 
 入口：仓根的 `README.md`（即 `extensions/genbot/README.md`）。
 
@@ -41,12 +41,12 @@ V1 范围：核心契约 + 编排 + 无限动画支持（已完成）；后续 p
 - 扫描 `.prefab` → 生成 `__registry.json` 全局索引；
 - 在 Cocos 编辑器 Inspector 注入"勾选要导出哪些节点"的 UI；
 - 写出节点契约 `*.bind.json` + 自动生成的 `*.gen.ts` 内部基类 + 首次生成的 `*.view.ts` 业务类；
-- `IView` 运行时契约（在 `assets/scripts/_genbot/IView.ts`），所有 `*.gen.ts` 自动 `implements IView`；
+- `IView` 运行时契约（在 `assets/scripts/views/IView.ts`），所有 `*.gen.ts` 自动 `implements IView`；
 - 默认导出规则：仅导出 `cc.Button` 子类型，自动生成 `onClickXxx()` 处理器并绑定。
 
 ### （计划中）docs/iview/ — IView 运行时契约
 
-`assets/scripts/_genbot/IView.ts` 里定义的视图运行时契约：
+`assets/scripts/views/IView.ts` 里定义的视图运行时契约：
 
 ```typescript
 interface IView { bind(root: Node): void; }

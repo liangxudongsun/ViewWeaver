@@ -127,7 +127,7 @@ export class ScriptTypeRegistry {
    * 计算从 .gen.ts 到目标 .ts 的相对 import 路径（POSIX 风格、无扩展名）
    *
    * 例：
-   *   gen: <root>/assets/scripts/_genbot/common_ui/common_ui.gen.ts
+   *   gen: <root>/assets/scripts/views/common_ui/common_ui.gen.ts
    *   tgt: <root>/assets/scripts/game/effect/MultiplierBallEffect.ts
    *   →    "../../game/effect/MultiplierBallEffect"
    */

@@ -1,15 +1,15 @@
 "use strict";
 
 module.exports = {
-    genbot: {
+    viewweaver: {
         menu: {
-            generate: "genbot: Generate PrefabView",
-            openPanel: "genbot: Open Panel",
-            regenerateAll: "genbot: Regenerate All",
-            validateAll: "genbot: Validate All",
+            generate: "ViewWeaver: Generate PrefabView",
+            openPanel: "ViewWeaver: Open Panel",
+            regenerateAll: "ViewWeaver: Regenerate All",
+            validateAll: "ViewWeaver: Validate All",
         },
         panel: {
-            title: "genbot Panel",
+            title: "ViewWeaver Panel",
             generate: "Generate",
             reload: "Reload",
             saveBind: "Save bind.json",

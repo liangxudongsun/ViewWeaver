@@ -1,10 +1,10 @@
 #!/usr/bin/env node
 /**
- * genbot CLI（v0.2 重构版）
+ * ViewWeaver CLI（v0.2 重构版）
  *
  * 行为变化：
- * - 输出位置不再默认 prefab 同级，而是写到 <project>/assets/scripts/_genbot/<prefabName>/
- * - 自动维护 <project>/assets/scripts/_genbot/__registry.json
+ * - 输出位置不再默认 prefab 同级，而是写到 <project>/assets/scripts/views/<prefabName>/
+ * - 自动维护 <project>/assets/scripts/views/__registry.json
  * - 项目根优先取 --project，未传则从 prefab 路径向上推断（找到含 assets/ 的目录）
  *
  * 用法：
@@ -103,9 +103,9 @@ function parseArgs(argv: string[]): CliArgs {
 function printHelp(): void {
   process.stdout.write(
     [
-      `genbot v${TOOL_VERSION} — Cocos prefab View 代码生成工具`,
+      `ViewWeaver v${TOOL_VERSION} — Cocos prefab View 代码生成工具`,
       "",
-      "Usage: genbot <prefab> [options]",
+      "Usage: viewweaver <prefab> [options]",
       "",
       "Options:",
       "  --project <dir>     project root (default: auto-detect from prefab path)",
@@ -123,15 +123,15 @@ function printHelp(): void {
 }
 
 function fail(msg: string): never {
-  process.stderr.write(`[genbot] ERROR: ${msg}\n`);
+  process.stderr.write(`[viewweaver] ERROR: ${msg}\n`);
   process.exit(1);
 }
 
 function buildLogger(quiet: boolean): Logger {
   return {
-    info: (m) => !quiet && process.stdout.write(`[genbot] ${m}\n`),
-    warn: (m) => process.stderr.write(`[genbot] WARN: ${m}\n`),
-    error: (m) => process.stderr.write(`[genbot] ERROR: ${m}\n`),
+    info: (m) => !quiet && process.stdout.write(`[viewweaver] ${m}\n`),
+    warn: (m) => process.stderr.write(`[viewweaver] WARN: ${m}\n`),
+    error: (m) => process.stderr.write(`[viewweaver] ERROR: ${m}\n`),
   };
 }
 
@@ -140,7 +140,7 @@ function main(): void {
   const prefabPath = path.resolve(args.prefab);
   if (!fs.existsSync(prefabPath)) fail(`prefab not found: ${prefabPath}`);
   if (!prefabPath.endsWith(".prefab")) {
-    process.stderr.write(`[genbot] WARN: file extension is not .prefab — proceeding anyway\n`);
+    process.stderr.write(`[viewweaver] WARN: file extension is not .prefab — proceeding anyway\n`);
   }
 
   // 1. 推断项目根
@@ -196,7 +196,7 @@ function main(): void {
     };
     registry.upsert(entry);
     if (!args.quiet) {
-      process.stdout.write(`[genbot] registry updated: ${registry.path}\n`);
+      process.stdout.write(`[viewweaver] registry updated: ${registry.path}\n`);
     }
   }
 }

@@ -1,5 +1,5 @@
 {
-  "name": "genbot",
+  "name": "viewweaver",
   "version": "0.2.0",
   "description": "Cocos Creator extension that auto-generates typed View bindings from prefabs",
   "author": "h5_game_sh_tpe",
@@ -21,13 +21,13 @@
   "contributions": {
     "menu": [
       {
-        "path": "i18n:menu.tools/genbot",
-        "label": "i18n:genbot.menu.regenerateAll",
+        "path": "i18n:menu.tools/viewweaver",
+        "label": "i18n:viewweaver.menu.regenerateAll",
         "message": "regenerate-all"
       },
       {
-        "path": "i18n:menu.tools/genbot",
-        "label": "i18n:genbot.menu.validateAll",
+        "path": "i18n:menu.tools/viewweaver",
+        "label": "i18n:viewweaver.menu.validateAll",
         "message": "validate-all"
       }
     ],

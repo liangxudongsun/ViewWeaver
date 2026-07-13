@@ -2,7 +2,7 @@
  * Cocos Creator Inspector 注入 — `.prefab` 资源选中时
  *
  * 在用户点击 Assets 面板里的 .prefab 文件时，本脚本会被 cocos 加载到 inspector
- * 渲染进程里，把 genbot 的「导出配置 UI」追加到 inspector 默认内容下方。
+ * 渲染进程里，把 ViewWeaver 的「导出配置 UI」追加到 inspector 默认内容下方。
  *
  * 核心交互：
  *  1. update(assetList, metaList) → 拉远端 main 的 prepare-prefab-config
@@ -97,18 +97,18 @@ interface ApplyResult {
 // ===== Cocos panel-style exports =====
 
 export const $ = {
-  root: ".genbot-section",
-  status: ".genbot-status",
-  summary: ".genbot-summary",
-  treeContainer: ".genbot-tree",
-  search: ".genbot-search",
-  expandAll: ".genbot-expand-all",
-  collapseAll: ".genbot-collapse-all",
-  selectDefault: ".genbot-select-default",
-  selectNone: ".genbot-select-none",
-  generate: ".genbot-generate",
-  saveBindOnly: ".genbot-save-bind",
-  reset: ".genbot-reset",
+  root: ".viewweaver-section",
+  status: ".viewweaver-status",
+  summary: ".viewweaver-summary",
+  treeContainer: ".viewweaver-tree",
+  search: ".viewweaver-search",
+  expandAll: ".viewweaver-expand-all",
+  collapseAll: ".viewweaver-collapse-all",
+  selectDefault: ".viewweaver-select-default",
+  selectNone: ".viewweaver-select-none",
+  generate: ".viewweaver-generate",
+  saveBindOnly: ".viewweaver-save-bind",
+  reset: ".viewweaver-reset",
 };
 
 // 内联模板：单 ui-prop 占位，自身 DOM 全自己撑。
@@ -117,13 +117,13 @@ export const $ = {
 // 在不同 Cocos 版本里有差异。
 export const template = `
 <style>
-.genbot-section { padding: 4px 6px; margin-top: 6px; }
-.genbot-section .genbot-status { font-size: 11px; opacity: 0.85; padding: 2px 0 6px; }
-.genbot-section .muted { opacity: 0.65; font-size: 11px; }
-.genbot-toolbar { display: flex; flex-direction: row; align-items: center; gap: 4px; padding: 2px 0; }
-.genbot-toolbar .spacer { flex: 1; }
-.genbot-search { flex: 1; }
-.genbot-tree-wrap {
+.viewweaver-section { padding: 4px 6px; margin-top: 6px; }
+.viewweaver-section .viewweaver-status { font-size: 11px; opacity: 0.85; padding: 2px 0 6px; }
+.viewweaver-section .muted { opacity: 0.65; font-size: 11px; }
+.viewweaver-toolbar { display: flex; flex-direction: row; align-items: center; gap: 4px; padding: 2px 0; }
+.viewweaver-toolbar .spacer { flex: 1; }
+.viewweaver-search { flex: 1; }
+.viewweaver-tree-wrap {
   max-height: 360px; overflow-y: auto; overflow-x: hidden;
   border: 1px solid var(--color-normal-border, #555);
   border-radius: 3px;
@@ -131,51 +131,51 @@ export const template = `
   padding: 4px 0;
   background: var(--color-normal-fill-emphasis, rgba(0,0,0,0.15));
 }
-.genbot-tree { font-size: 12px; }
-.genbot-row { display: flex; align-items: center; gap: 4px; padding: 1px 4px; min-height: 18px; cursor: default; }
-.genbot-row:hover { background: var(--color-info-fill, rgba(255,255,255,0.04)); }
-.genbot-row.is-hidden { display: none; }
-.genbot-row.dim { opacity: 0.55; }
-.genbot-row .arrow { width: 10px; text-align: center; cursor: pointer; user-select: none; opacity: 0.7; }
-.genbot-row .arrow.placeholder { opacity: 0; cursor: default; }
-.genbot-row input[type=checkbox] { margin: 0; }
-.genbot-row .name { flex: 1; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
-.genbot-row.node-row.is-root .name::before { content: "● "; opacity: 0.6; }
-.genbot-row .badge {
+.viewweaver-tree { font-size: 12px; }
+.viewweaver-row { display: flex; align-items: center; gap: 4px; padding: 1px 4px; min-height: 18px; cursor: default; }
+.viewweaver-row:hover { background: var(--color-info-fill, rgba(255,255,255,0.04)); }
+.viewweaver-row.is-hidden { display: none; }
+.viewweaver-row.dim { opacity: 0.55; }
+.viewweaver-row .arrow { width: 10px; text-align: center; cursor: pointer; user-select: none; opacity: 0.7; }
+.viewweaver-row .arrow.placeholder { opacity: 0; cursor: default; }
+.viewweaver-row input[type=checkbox] { margin: 0; }
+.viewweaver-row .name { flex: 1; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.viewweaver-row.node-row.is-root .name::before { content: "● "; opacity: 0.6; }
+.viewweaver-row .badge {
   font-size: 10px; padding: 0 4px; border-radius: 8px;
   background: var(--color-info-fill, rgba(80,160,220,0.4)); color: #fff; opacity: 0.9;
 }
-.genbot-row.comp-row { padding-left: 22px; }
-.genbot-row.comp-row .name { color: var(--color-success-fill, #6dc06d); }
-.genbot-row.comp-row .name.is-builtin { color: var(--color-info-fill, #7ab9ff); }
-.genbot-row.comp-row .name.is-unknown { color: var(--color-warn-fill, #d6a13a); }
-.genbot-actions { display: flex; flex-direction: row; align-items: center; gap: 4px; padding-top: 4px; border-top: 1px solid var(--color-normal-border, rgba(255,255,255,0.08)); margin-top: 4px; }
-.genbot-actions .spacer { flex: 1; }
-.genbot-actions ui-button.primary { font-weight: 600; }
+.viewweaver-row.comp-row { padding-left: 22px; }
+.viewweaver-row.comp-row .name { color: var(--color-success-fill, #6dc06d); }
+.viewweaver-row.comp-row .name.is-builtin { color: var(--color-info-fill, #7ab9ff); }
+.viewweaver-row.comp-row .name.is-unknown { color: var(--color-warn-fill, #d6a13a); }
+.viewweaver-actions { display: flex; flex-direction: row; align-items: center; gap: 4px; padding-top: 4px; border-top: 1px solid var(--color-normal-border, rgba(255,255,255,0.08)); margin-top: 4px; }
+.viewweaver-actions .spacer { flex: 1; }
+.viewweaver-actions ui-button.primary { font-weight: 600; }
 </style>
-<ui-prop class="genbot-prop" type="dump" hidden></ui-prop>
-<ui-section class="genbot-section" header="genbot · 导出配置" expand>
-  <div class="genbot-status">— 加载中 —</div>
-  <div class="genbot-toolbar">
-    <ui-input class="genbot-search" placeholder="按节点名过滤"></ui-input>
+<ui-prop class="viewweaver-prop" type="dump" hidden></ui-prop>
+<ui-section class="viewweaver-section" header="ViewWeaver · 导出配置" expand>
+  <div class="viewweaver-status">— 加载中 —</div>
+  <div class="viewweaver-toolbar">
+    <ui-input class="viewweaver-search" placeholder="按节点名过滤"></ui-input>
     <span class="spacer"></span>
-    <ui-button class="genbot-expand-all small">全展开</ui-button>
-    <ui-button class="genbot-collapse-all small">全折叠</ui-button>
+    <ui-button class="viewweaver-expand-all small">全展开</ui-button>
+    <ui-button class="viewweaver-collapse-all small">全折叠</ui-button>
   </div>
-  <div class="genbot-toolbar">
-    <ui-button class="genbot-select-default small">勾选默认</ui-button>
-    <ui-button class="genbot-select-none small">全取消</ui-button>
+  <div class="viewweaver-toolbar">
+    <ui-button class="viewweaver-select-default small">勾选默认</ui-button>
+    <ui-button class="viewweaver-select-none small">全取消</ui-button>
     <span class="spacer"></span>
-    <span class="genbot-summary muted"></span>
+    <span class="viewweaver-summary muted"></span>
   </div>
-  <div class="genbot-tree-wrap">
-    <div class="genbot-tree"></div>
+  <div class="viewweaver-tree-wrap">
+    <div class="viewweaver-tree"></div>
   </div>
-  <div class="genbot-actions">
-    <ui-button class="genbot-reset" tooltip="把配置重置为按默认规则生成的样子">重置为默认</ui-button>
+  <div class="viewweaver-actions">
+    <ui-button class="viewweaver-reset" tooltip="把配置重置为按默认规则生成的样子">重置为默认</ui-button>
     <span class="spacer"></span>
-    <ui-button class="genbot-save-bind" tooltip="只把 bind.json 写盘，不重新生成 .gen.ts">仅保存 bind.json</ui-button>
-    <ui-button class="genbot-generate primary" tooltip="保存 bind.json 并重新生成 .gen.ts">生成</ui-button>
+    <ui-button class="viewweaver-save-bind" tooltip="只把 bind.json 写盘，不重新生成 .gen.ts">仅保存 bind.json</ui-button>
+    <ui-button class="viewweaver-generate primary" tooltip="保存 bind.json 并重新生成 .gen.ts">生成</ui-button>
   </div>
 </ui-section>
 `;
@@ -239,7 +239,7 @@ function renderTree(panel: PanelThis): void {
 
     // 节点行
     const row = document.createElement("div");
-    row.className = "genbot-row node-row" + (isRoot ? " is-root" : "");
+    row.className = "viewweaver-row node-row" + (isRoot ? " is-root" : "");
     if (!visible) row.classList.add("is-hidden");
     if (!matched && keyword) row.classList.add("dim");
     row.style.paddingLeft = `${depth * 12 + 4}px`;
@@ -308,7 +308,7 @@ function renderTree(panel: PanelThis): void {
         const checked = st.compChecked.get(node.path)?.has(ckey) ?? false;
 
         const crow = document.createElement("div");
-        crow.className = "genbot-row comp-row";
+        crow.className = "viewweaver-row comp-row";
         if (!visible) crow.classList.add("is-hidden");
         crow.style.paddingLeft = `${(depth + 1) * 12 + 4}px`;
 
@@ -529,7 +529,7 @@ export function ready(this: PanelThis): void {
   save?.addEventListener("confirm", async () => {
     if (!this.state) return;
     setStatus(this, "正在保存 bind.json …");
-    const r = (await Editor.Message.request("genbot", "save-bind-only", {
+    const r = (await Editor.Message.request("viewweaver", "save-bind-only", {
       uuid: this.state.uuid,
       bindConfig: this.state.config,
     })) as { ok: boolean; bindJsonPath?: string; message?: string };
@@ -542,7 +542,7 @@ export function ready(this: PanelThis): void {
   gen?.addEventListener("confirm", async () => {
     if (!this.state) return;
     setStatus(this, "正在生成 .gen.ts …");
-    const r = (await Editor.Message.request("genbot", "apply-and-generate", {
+    const r = (await Editor.Message.request("viewweaver", "apply-and-generate", {
       uuid: this.state.uuid,
       bindConfig: this.state.config,
     })) as ApplyResult;
@@ -579,7 +579,7 @@ export async function update(
   setStatus(this, "解析中 …");
 
   const result = (await Editor.Message.request(
-    "genbot",
+    "viewweaver",
     "prepare-prefab-config",
     target.uuid
   )) as PrepareConfigResult;

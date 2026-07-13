@@ -10,33 +10,36 @@
  * 格式（JSON）：
  * {
  *   "$schema": 1,
- *   "tool": "genbot",
+ *   "tool": "viewweaver",
  *   "version": "0.2.0",
  *   "entries": {
  *     "<prefabName>": {
  *       "prefabName": "common_ui",
- *       "prefabUuid": "abc-...",        // 可选，prefab .meta 中的 uuid（v0.3 接进来）
- *       "prefabPath": "extensions/proj-l-commonui/assets/ab/prefab/ui/common_ui.prefab",
- *       "genTsPath": "assets/scripts/_genbot/common_ui/common_ui.gen.ts",
- *       "bindJsonPath": "assets/scripts/_genbot/common_ui/common_ui.bind.json",
- *       "viewClassName": "Common_uiPrefabView",
+ *       "prefabUuid": "abc-...",
+ *       "prefabPath": "assets/resources/prefab/MainUI.prefab",
+ *       "genTsPath": "assets/scripts/views/common_ui/common_ui.gen.ts",
+ *       "bindJsonPath": "assets/scripts/views/common_ui/common_ui.bind.json",
+ *       "viewClassName": "Common_uiView",
  *       "lastGenAt": "2026-05-06T12:34:56.000Z",
  *       "lastGenBy": "cli" | "extension" | "auto-watch"
  *     }
  *   }
  * }
  *
- * 并发模型（v0.2 单进程足够）：
- * - 简单的 read → mutate → write 序列
- * - writeFileSafe 使用 tmp + rename 模拟原子
- * - 多进程同时写的极端场景留到 v0.3 上锁；CLI / 扩展不会真的并发触发
+ * 兼容：若仅有旧 `assets/scripts/_genbot/__registry.json`（tool: genbot），
+ * load() 会迁移路径到 views/ 并在下次 save 写出新文件。
  */
 
 import * as fs from "node:fs";
 import * as path from "node:path";
 
 import { writeFileSafe, ensureDir, readJsonIfExists } from "../utils/paths.ts";
-import { resolveRegistryPath } from "./ProjectLayout.ts";
+import {
+  LEGACY_GENBOT_ROOT_REL,
+  VIEWWEAVER_ROOT_REL,
+  resolveLegacyRegistryPath,
+  resolveRegistryPath,
+} from "./ProjectLayout.ts";
 import { TOOL_VERSION } from "./RunOnce.ts";
 
 export interface RegistryEntry {
@@ -55,26 +58,71 @@ export interface RegistryEntry {
   /** 上次生成时间（ISO） */
   lastGenAt: string;
   /** 上次生成来源 */
-  lastGenBy: "cli" | "extension" | "auto-watch" | "test" | "inspector";
+  lastGenBy: "cli" | "extension" | "auto-watch" | "test" | "inspector" | "ai";
 }
 
 export interface RegistryFile {
   $schema: 1;
-  tool: "genbot";
+  tool: "viewweaver";
   version: string;
   entries: Record<string, RegistryEntry>;
 }
 
+/** 磁盘上可能仍是旧 tool 字段 */
+interface RawRegistryFile {
+  $schema?: number;
+  tool?: string;
+  version?: string;
+  entries?: Record<string, RegistryEntry>;
+}
+
 const EMPTY: () => RegistryFile = () => ({
   $schema: 1,
-  tool: "genbot",
+  tool: "viewweaver",
   version: TOOL_VERSION,
   entries: {},
 });
 
+/** 把相对路径中的旧 _genbot 根改成 views */
+function migrateRelPath(rel: string | undefined): string | undefined {
+  if (!rel) return rel;
+  const posix = rel.replace(/\\/g, "/");
+  if (posix.startsWith(`${LEGACY_GENBOT_ROOT_REL}/`) || posix === LEGACY_GENBOT_ROOT_REL) {
+    return posix.replace(LEGACY_GENBOT_ROOT_REL, VIEWWEAVER_ROOT_REL);
+  }
+  return posix;
+}
+
+function migrateEntry(entry: RegistryEntry): RegistryEntry {
+  return {
+    ...entry,
+    genTsPath: migrateRelPath(entry.genTsPath) ?? entry.genTsPath,
+    bindJsonPath: migrateRelPath(entry.bindJsonPath) ?? entry.bindJsonPath,
+    viewTsPath: migrateRelPath(entry.viewTsPath),
+  };
+}
+
+function normalizeRegistry(raw: RawRegistryFile): RegistryFile | null {
+  if (raw.$schema !== 1) return null;
+  if (raw.tool !== "viewweaver" && raw.tool !== "genbot") return null;
+  const entries: Record<string, RegistryEntry> = {};
+  for (const [k, v] of Object.entries(raw.entries ?? {})) {
+    entries[k] = migrateEntry(v);
+  }
+  return {
+    $schema: 1,
+    tool: "viewweaver",
+    version: raw.version || TOOL_VERSION,
+    entries,
+  };
+}
+
 export class RegistryManager {
   private readonly _projectRoot: string;
   private readonly _registryPath: string;
+  private readonly _legacyRegistryPath: string;
+  /** 从旧布局迁入后，下次 save 写新路径 */
+  private _dirtyFromLegacy = false;
 
   constructor(projectRoot: string) {
     if (!path.isAbsolute(projectRoot)) {
@@ -82,35 +130,48 @@ export class RegistryManager {
     }
     this._projectRoot = projectRoot;
     this._registryPath = resolveRegistryPath(projectRoot);
+    this._legacyRegistryPath = resolveLegacyRegistryPath(projectRoot);
   }
 
-  /** registry 文件绝对路径 */
+  /** registry 文件绝对路径（新布局） */
   public get path(): string {
     return this._registryPath;
   }
 
   /** 读出当前内容，文件不存在则返回空模板（不会写盘） */
   public load(): RegistryFile {
-    const raw = readJsonIfExists<RegistryFile>(this._registryPath);
-    if (!raw) return EMPTY();
-    if (raw.$schema !== 1 || raw.tool !== "genbot") {
-      // 文件被外部破坏，留底备份后重置
+    const modern = readJsonIfExists<RawRegistryFile>(this._registryPath);
+    if (modern) {
+      const norm = normalizeRegistry(modern);
+      if (norm) {
+        this._dirtyFromLegacy = false;
+        return norm;
+      }
       const backup = `${this._registryPath}.broken.${Date.now()}.bak`;
       try {
         fs.copyFileSync(this._registryPath, backup);
       } catch {
-        /* 备份失败也继续，不应该阻塞工作流 */
+        /* ignore */
       }
       return EMPTY();
     }
-    raw.entries = raw.entries ?? {};
-    return raw;
+
+    const legacy = readJsonIfExists<RawRegistryFile>(this._legacyRegistryPath);
+    if (legacy) {
+      const norm = normalizeRegistry(legacy);
+      if (norm) {
+        this._dirtyFromLegacy = true;
+        return norm;
+      }
+    }
+
+    return EMPTY();
   }
 
   /** upsert 单个条目 + 立刻落盘 */
   public upsert(entry: RegistryEntry): RegistryFile {
     const file = this.load();
-    file.entries[entry.prefabName] = entry;
+    file.entries[entry.prefabName] = migrateEntry(entry);
     file.version = TOOL_VERSION;
     this.save(file);
     return file;
@@ -135,16 +196,21 @@ export class RegistryManager {
     );
   }
 
-  /** 把 file 内容稳定排序后写盘 */
+  /** 把 file 内容稳定排序后写盘（始终写新布局） */
   public save(file: RegistryFile): void {
     const ordered: RegistryFile = {
       $schema: 1,
-      tool: "genbot",
+      tool: "viewweaver",
       version: file.version || TOOL_VERSION,
-      entries: sortKeys(file.entries),
+      entries: sortKeys(
+        Object.fromEntries(
+          Object.entries(file.entries).map(([k, v]) => [k, migrateEntry(v)])
+        )
+      ),
     };
     ensureDir(path.dirname(this._registryPath));
     writeFileSafe(this._registryPath, JSON.stringify(ordered, null, 2) + "\n");
+    this._dirtyFromLegacy = false;
   }
 }
 

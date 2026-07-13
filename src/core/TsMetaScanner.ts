@@ -61,7 +61,8 @@ const DEFAULT_SKIP: ReadonlySet<string> = new Set([
   ".idea",
   "temp",
   ".tmp",
-  "_genbot", // 不扫自己生成的目录
+  "views", // 不扫自己生成的目录
+  "_genbot", // 旧布局兼容
 ]);
 
 /**

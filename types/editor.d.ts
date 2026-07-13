@@ -1,7 +1,7 @@
 /**
  * Cocos Creator 3.8 Editor API 最小化类型声明
  *
- * 只覆盖 genbot 实际用到的接口；完整类型见 @cocos/creator-types
+ * 只覆盖 ViewWeaver 实际用到的接口；完整类型见 @cocos/creator-types
  * 当用户在他们的开发机上 `npm install --save-dev @cocos/creator-types` 后会被覆盖。
  */
 
@@ -68,7 +68,7 @@ declare namespace Editor {
   //   - 3.8.8（实测）：访问 Editor.Logger.info → TypeError
   //   - 部分 3.7 内部构建：曾出现过 Editor.Logger.log
   // 业内通行做法是直接用 console.{log|warn|error}，Cocos 控制台会捕获并按级别染色。
-  // 因此 genbot 不再依赖 Editor.Logger，统一通过 main.ts 内部的 log helper 走 console。
+  // 因此 ViewWeaver 不再依赖 Editor.Logger，统一通过 main.ts 内部的 log helper 走 console。
 
   /** 面板：在编辑器里开/关 panel；并提供 panel 定义 API
    *

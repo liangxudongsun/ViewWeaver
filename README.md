@@ -1,4 +1,4 @@
-# genbot
+# ViewWeaver
 
 Cocos Creator 编辑器扩展，根据 prefab 自动生成强类型的 View 绑定代码 (`*.gen.ts`)，配合手写 View (`*.ts`) 形成可编译校验的「prefab 契约」。
 
@@ -11,7 +11,7 @@ xxx.prefab                            (美术维护，节点结构自由)
         │
         │  程序员通过编辑器面板勾选要导出的节点
         ▼
-assets/scripts/_genbot/xxx/
+assets/scripts/views/xxx/
   xxx.bind.json                       (导出契约，进 Git，独立于 prefab)
         │
         │  扩展或 CLI 自动生成
@@ -30,7 +30,7 @@ assets/scripts/_genbot/xxx/
 ## 输出布局（v0.2 起约定）
 
 ```
-<project>/assets/scripts/_genbot/
+<project>/assets/scripts/views/
   __registry.json                     全局索引：prefab → gen.ts / view.ts 映射
   common_ui/
     common_ui.gen.ts                  内部基类 _Common_uiView（自动生成）
@@ -62,7 +62,7 @@ prefab 移动 / 重命名时只需改 `__registry.json` 里的 `prefabPath`，�
 **阶段 1（已完成）— 扩展骨架**
 
 - [x] 抽出 `runOnce(...)` 纯函数，CLI / 扩展 / 测试三方共享
-- [x] 输出路径自动写到 `<project>/assets/scripts/_genbot/<prefabName>/`
+- [x] 输出路径自动写到 `<project>/assets/scripts/views/<prefabName>/`
 - [x] `__registry.json` 全局索引，原子写入
 - [x] `tsconfig.build.json` + npm 脚本（build / watch / clean / cli / test）
 - [x] 自带 `types/editor.d.ts` 最小 Cocos Editor API 类型声明（不依赖 npm 包就能编码）
@@ -105,7 +105,7 @@ prefab 移动 / 重命名时只需改 `__registry.json` 里的 `prefabPath`，�
 ### CLI（开发期 / 没装 Cocos 时也能用）
 
 ```bash
-# 跑生成（自动找项目根 + 写到 assets/scripts/_genbot/<name>/）
+# 跑生成（自动找项目根 + 写到 assets/scripts/views/<name>/）
 node --experimental-strip-types src/cli.ts <prefab-path>
 
 # 强制重置 bind 配置
@@ -124,7 +124,7 @@ node --experimental-strip-types tests/smoke.test.ts
 CLI 行为：
 1. 解析 prefab，构建节点树
 2. 找到 Cocos 项目根（含 `assets/` + `settings/` 的最近祖先目录）
-3. 输出到 `<project>/assets/scripts/_genbot/<prefabName>/`
+3. 输出到 `<project>/assets/scripts/views/<prefabName>/`
 4. 加载已有 `bind.json` 或生成默认配置
 5. 生成 `*.gen.ts`，更新 `__registry.json`
 
@@ -143,15 +143,15 @@ npm run build      # → dist/main.js
 | 入口 | 功能 |
 |------|------|
 | **资源面板 → 单击 prefab 文件 → Inspector 面板** | ⭐ 主入口：可视化勾选要导出的节点 / 组件，一键生成 |
-| 资源面板 → 右键 prefab → "genbot：生成 PrefabView" | 用当前磁盘 bind.json（或默认规则）直接生成，不开 UI |
+| 资源面板 → 右键 prefab → "ViewWeaver：生成 PrefabView" | 用当前磁盘 bind.json（或默认规则）直接生成，不开 UI |
 | 进入 prefab 编辑模式 → 选中任意 UI 节点 → Inspector | 看到 `✓ 导出为 xxx` 或 `[+ 加入 bind.json]` 迷你状态 |
-| 顶部菜单 Tools > genbot > 全量重生 | 按 `__registry.json` 重生所有已注册 prefab |
-| 顶部菜单 Tools > genbot > 校验所有 | 仅检查 bind.json 与 prefab 是否还匹配（不写盘） |
+| 顶部菜单 Tools > ViewWeaver > 全量重生 | 按 `__registry.json` 重生所有已注册 prefab |
+| 顶部菜单 Tools > ViewWeaver > 校验所有 | 仅检查 bind.json 与 prefab 是否还匹配（不写盘） |
 
 #### 主流程（推荐）
 
 1. 在 Cocos Assets 面板里**单击**一个 `.prefab` 文件
-2. 右侧 Inspector 面板里出现 `genbot · 导出配置` 区段，自动列出节点树
+2. 右侧 Inspector 面板里出现 `ViewWeaver · 导出配置` 区段，自动列出节点树
 3. 勾选 / 取消你要导出的节点和组件（默认勾选规则见下文「默认导出策略」）
 4. 点 **[生成]** —— 同时落盘 `bind.json` 和 `gen.ts`
 5. 之后业务里 `import { Common_uiPrefabView } from "...common_ui.gen.ts"` 即可

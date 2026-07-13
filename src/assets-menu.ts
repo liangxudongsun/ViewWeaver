@@ -36,7 +36,7 @@ interface MenuItem {
 
 /**
  * 资源右键菜单：作用于单个资源条目
- * 仅 .prefab 才追加 genbot 子项
+ * 仅 .prefab 才追加 ViewWeaver 子项
  */
 export function onAssetMenu(assetInfo: AssetMenuInfo): MenuItem[] {
   if (!assetInfo) return [];
@@ -50,11 +50,11 @@ export function onAssetMenu(assetInfo: AssetMenuInfo): MenuItem[] {
 
   return [
     {
-      label: "i18n:genbot.menu.generate",
+      label: "i18n:viewweaver.menu.generate",
       click(): void {
         // 跨进程发消息到 main.ts 的 generateFromAsset handler
         // 第三个参数是 uuid，main 里 resolveSelectedPrefab 会处理
-        Editor.Message.send("genbot", "generate-from-asset", assetInfo.uuid);
+        Editor.Message.send("viewweaver", "generate-from-asset", assetInfo.uuid);
       },
     },
   ];

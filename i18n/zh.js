@@ -1,15 +1,15 @@
 "use strict";
 
 module.exports = {
-    genbot: {
+    viewweaver: {
         menu: {
-            generate: "genbot：生成 PrefabView",
-            openPanel: "genbot：打开面板",
-            regenerateAll: "genbot：全量重生",
-            validateAll: "genbot：校验所有",
+            generate: "ViewWeaver：生成 PrefabView",
+            openPanel: "ViewWeaver：打开面板",
+            regenerateAll: "ViewWeaver：全量重生",
+            validateAll: "ViewWeaver：校验所有",
         },
         panel: {
-            title: "genbot 面板",
+            title: "ViewWeaver 面板",
             generate: "生成",
             reload: "刷新",
             saveBind: "保存 bind.json",

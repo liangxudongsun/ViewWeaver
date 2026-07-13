@@ -1,35 +1,47 @@
 /**
- * genbot 输出布局规则
+ * ViewWeaver 输出布局规则
  *
  * 约定：
- * - 所有生成产物固定放在 <project>/assets/scripts/_genbot/ 下
- * - 每个 prefab 一个子目录：assets/scripts/_genbot/<prefabName>/
+ * - 所有生成产物固定放在 <project>/assets/scripts/views/ 下
+ * - 每个 prefab 一个子目录：assets/scripts/views/<prefabName>/
  *   - <prefabName>.gen.ts     : 自动生成的 PrefabView 代码
  *   - <prefabName>.bind.json  : 节点契约配置
+ *   - <prefabName>.view.ts    : 开发者承基类（仅首次生成）
  * - 同名 prefab 冲突：以 prefab 文件 UUID 区分（v0.2 暂不支持，v0.3 加冲突检测）
  *
- * 所有 prefab 不区分原始路径，扁平化在 _genbot/ 下，避免：
+ * 所有 prefab 不区分原始路径，扁平化在 views/ 下，避免：
  *   - prefab 移动后还要追着改生成代码路径
  *   - 不同 bundle 的 prefab 一会儿命中 ab/ 一会儿命中 ui/
  *   - 跨 bundle 引用复杂的相对路径 import
  *
  * 路径映射靠 __registry.json 维护（详见 RegistryManager）。
+ *
+ * 兼容：旧布局 assets/scripts/_genbot/ 由 RegistryManager 读取并迁移。
  */
 
 import * as fs from "node:fs";
 import * as path from "node:path";
 
-/** 生成根目录相对项目根：assets/scripts/_genbot */
-export const GENBOT_ROOT_REL = "assets/scripts/_genbot";
+/** 生成根目录相对项目根：assets/scripts/views */
+export const VIEWWEAVER_ROOT_REL = "assets/scripts/views";
+
+/** @deprecated 旧布局；仅供迁移检测 */
+export const LEGACY_GENBOT_ROOT_REL = "assets/scripts/_genbot";
+
+/** @deprecated use VIEWWEAVER_ROOT_REL */
+export const GENBOT_ROOT_REL = VIEWWEAVER_ROOT_REL;
 
 /** registry 文件相对项目根 */
-export const REGISTRY_REL = "assets/scripts/_genbot/__registry.json";
+export const REGISTRY_REL = "assets/scripts/views/__registry.json";
+
+/** 旧 registry 相对路径 */
+export const LEGACY_REGISTRY_REL = "assets/scripts/_genbot/__registry.json";
 
 /** 单个 prefab 的输出目录约定 */
 export interface PrefabOutputLayout {
   /** prefab 名（不含扩展名） */
   prefabName: string;
-  /** 输出绝对目录：<project>/assets/scripts/_genbot/<prefabName> */
+  /** 输出绝对目录：<project>/assets/scripts/views/<prefabName> */
   outDir: string;
   /** .gen.ts 绝对路径 */
   genTsPath: string;
@@ -52,13 +64,13 @@ export interface LayoutOptions {
   prefabName: string;
 }
 
-/** 计算 prefab 在 _genbot/ 下的输出布局（所有路径归一为绝对路径 + 相对路径双份） */
+/** 计算 prefab 在 views/ 下的输出布局（所有路径归一为绝对路径 + 相对路径双份） */
 export function resolvePrefabLayout(opts: LayoutOptions): PrefabOutputLayout {
   if (!path.isAbsolute(opts.projectRoot)) {
     throw new Error(`projectRoot must be absolute: ${opts.projectRoot}`);
   }
   const safeName = sanitizePrefabName(opts.prefabName);
-  const outDir = path.join(opts.projectRoot, GENBOT_ROOT_REL, safeName);
+  const outDir = path.join(opts.projectRoot, VIEWWEAVER_ROOT_REL, safeName);
   const genTsPath = path.join(outDir, `${safeName}.gen.ts`);
   const bindJsonPath = path.join(outDir, `${safeName}.bind.json`);
   const viewTsPath = path.join(outDir, `${safeName}.view.ts`);
@@ -74,12 +86,20 @@ export function resolvePrefabLayout(opts: LayoutOptions): PrefabOutputLayout {
   };
 }
 
-/** registry 文件绝对路径 */
+/** registry 文件绝对路径（新布局） */
 export function resolveRegistryPath(projectRoot: string): string {
   if (!path.isAbsolute(projectRoot)) {
     throw new Error(`projectRoot must be absolute: ${projectRoot}`);
   }
   return path.join(projectRoot, REGISTRY_REL);
+}
+
+/** 旧 registry 绝对路径 */
+export function resolveLegacyRegistryPath(projectRoot: string): string {
+  if (!path.isAbsolute(projectRoot)) {
+    throw new Error(`projectRoot must be absolute: ${projectRoot}`);
+  }
+  return path.join(projectRoot, LEGACY_REGISTRY_REL);
 }
 
 /** 把绝对路径转换成相对项目根的路径（用 / 分隔，便于 JSON 持久化跨平台） */
@@ -93,7 +113,7 @@ export function toAbs(projectRoot: string, relPath: string): string {
 }
 
 /**
- * 检测 prefab 是否能合法落到 _genbot/ 下
+ * 检测 prefab 是否能合法落到 views/ 下
  * - 名字不能为空
  * - 不允许 .. / 等路径字符（防注入）
  */

@@ -74,7 +74,7 @@
 
 ### IView 是什么
 
-`assets/scripts/_genbot/IView.ts` 定义的视图运行时契约：
+`assets/scripts/views/IView.ts` 定义的视图运行时契约：
 
 ```typescript
 export interface IView {
@@ -225,7 +225,7 @@ container Node (Widget 在这里：决定常态位置)
 - 进场动画把 panel 从 (800, 0, 0) tween 到 (0, 0, 0)；
 - Widget 看到 container 没动，不掺和。
 
-### genbot 的 lint 想法
+### ViewWeaver 的 lint 想法
 
 未来 genbot 可以扫描 prefab：当一个节点同时挂 Widget 和被动画引用时报警，提示分层。这是 V2/V3 的功能。
 
